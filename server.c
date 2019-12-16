@@ -79,6 +79,28 @@ int addtoepoll (int fd) {
     return epoll_ctl (epollfd, EPOLL_CTL_ADD, fd, &ev);
 }
 
+int removeclient (int fd) {
+    struct EVENTDATALIST* evdatalist = (struct EVENTDATALIST*) malloc (sizeof (struct EVENTDATALIST));
+    if (evdatalist == NULL) {
+        printf ("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
+        return -1;
+    }
+    evdatalist->fd = fd;
+    evdatalist->data[0] = 0x11;
+    evdatalist->tail = NULL;
+    pthread_mutex_lock (&mutex);
+    if (evdatalisthead == NULL) {
+        evdatalisthead = evdatalist;
+        evdatalisttail = evdatalisthead;
+    } else {
+        evdatalisttail->tail = evdatalist;
+        evdatalisttail = evdatalisttail->tail;
+    }
+    pthread_mutex_unlock (&mutex);
+    sem_post(&sem);
+    return 0;
+}
+
 int tun_alloc () {
     int fd = open ("/dev/net/tun", O_RDWR);
     if (fd < 0) {
@@ -148,7 +170,10 @@ void *writethread (void *arg) {
             }
             pthread_rwlock_unlock (&rwlock);
             if (fd) { // 如果fd不为0，就说明找到了对应的连接
-                write (fd, evdatalist->data, evdatalist->size);
+                int res = write (fd, evdatalist->data, evdatalist->size);
+                if (res < 0) {
+                    removeclient (fd);
+                }
             }
         } else if (data[0] == 0x10) { // 自定义的绑定用数据包
             if (memcmp (&data[1], password, 32)) { // 绑定密码错误
@@ -240,28 +265,6 @@ int create_writethread () {
         pthread_create (&threadid, &attr, writethread, NULL);
         pthread_attr_destroy (&attr);
     }
-}
-
-int removeclient (int fd) {
-    struct EVENTDATALIST* evdatalist = (struct EVENTDATALIST*) malloc (sizeof (struct EVENTDATALIST));
-    if (evdatalist == NULL) {
-        printf ("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
-        return -1;
-    }
-    evdatalist->fd = fd;
-    evdatalist->data[0] = 0x11;
-    evdatalist->tail = NULL;
-    pthread_mutex_lock (&mutex);
-    if (evdatalisthead == NULL) {
-        evdatalisthead = evdatalist;
-        evdatalisttail = evdatalisthead;
-    } else {
-        evdatalisttail->tail = evdatalist;
-        evdatalisttail = evdatalisttail->tail;
-    }
-    pthread_mutex_unlock (&mutex);
-    sem_post(&sem);
-    return 0;
 }
 
 void signalarmhandle () { // hello包检查，超过3
