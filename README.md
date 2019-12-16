@@ -15,8 +15,10 @@
 
 ## 编译命令
 
+```
 gcc -O3 -o server server.c -lpthread
 gcc -O3 -o client client.c -lpthread
+```
 
 ## 未来展望
 
