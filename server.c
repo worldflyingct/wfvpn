@@ -220,11 +220,10 @@ void *writethread (void *arg) {
             struct epoll_event ev;
             epoll_ctl (epollfd, EPOLL_CTL_DEL , evdatalist->fd, &ev);
             close (evdatalist->fd);
-            pthread_rwlock_wrlock (&rwlock);
             struct CLIENTLIST* clientlist;
+            pthread_rwlock_wrlock (&rwlock);
             for (clientlist = clientlisthead ; clientlist != NULL ; clientlist = clientlist->tail) {
                 if (clientlist->fd == evdatalist->fd) {
-                    printf ("host %d.%d.%d.%d disconnect, in %s, at %d\n", clientlist->ip[0], clientlist->ip[1], clientlist->ip[2], clientlist->ip[3],  __FILE__, __LINE__);
                     if (clientlist->head == NULL) {
                         clientlisthead = clientlist->tail;
                         clientlisthead->head = NULL;
@@ -240,6 +239,7 @@ void *writethread (void *arg) {
             }
             pthread_rwlock_unlock (&rwlock);
             if (clientlist != NULL) {
+                printf ("host %d.%d.%d.%d disconnect, in %s, at %d\n", clientlist->ip[0], clientlist->ip[1], clientlist->ip[2], clientlist->ip[3],  __FILE__, __LINE__);
                 free (clientlist);
             }
         } else if (data[0] == 0x12) { // 自定义的hello包
@@ -313,6 +313,7 @@ int main () {
     }
     sem_init (&sem, 0, 0);
     create_writethread ();
+    printf ("init finish, server port is %d password is "password", in %s, at %d\n", serverport,  __FILE__, __LINE__);
     while (1) {
         static struct epoll_event evs[MAX_EVENT];
         static int wait_count;
