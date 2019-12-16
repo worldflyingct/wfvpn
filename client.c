@@ -53,13 +53,13 @@ int connect_socketfd () {
     in_addr_t ip = inet_addr(serverip); // 服务器ip地址，这里不能输入域名
     if (ip == INADDR_NONE) {
         printf ("server ip error, in %s, at %d\n", __FILE__, __LINE__);
-		return -1;
+		return -2;
     }
     sin.sin_addr.s_addr = ip;
     sin.sin_port = htons (serverport);
     if(connect (fd, (struct sockaddr*)&sin, sizeof(sin)) < 0) {
         printf ("connect server fail, in %s, at %d\n", __FILE__, __LINE__);
-		return -2;
+		return -3;
 	}
     unsigned char data[37];
     data[0] = 0x10;
@@ -82,7 +82,7 @@ int connect_socketfd () {
     struct EVENTDATALIST* evdatalist = (struct EVENTDATALIST*) malloc (sizeof (struct EVENTDATALIST));
     if (evdatalist == NULL) {
         printf ("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
-        return -3;
+        return -4;
     }
     evdatalist->fd = fd;
     memcpy (evdatalist->data, data, sizeof (data));
