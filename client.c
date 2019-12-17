@@ -1,4 +1,4 @@
-#define serverip          "127.0.0.1" // 服务器的地址，不支持域名
+#define serverip          "47.110.163.33" // 服务器的地址，不支持域名
 #define serverport        3478
 #define clientip          "192.168.23.20/24"
 #define password          "vCIhnEMbk9wgK4uUxCptm4bFxAAkGdTs" // 密码固定为32位
@@ -23,7 +23,7 @@
 // 定时器相关
 #include <sys/time.h>
 
-#define MAXDATASIZE       2048
+#define MAXDATASIZE       4096
 #define MAXTHREAD         1
 #define MAX_EVENT         64
 #define MAX_ACCEPT        64
@@ -138,7 +138,7 @@ void *writethread (void *arg) {
         struct EVENTDATALIST* evdatalist = evdatalisthead;
         evdatalisthead = evdatalisthead->tail;
         pthread_mutex_unlock (&mutex);
-        char* data = evdatalist->data;
+        unsigned char* data = evdatalist->data;
         if ((data[0] & 0xf0) == 0x40 || data[0] == 0x10 || data[0] == 0x12) { // ipv4数据包或自定义数据包
             int res = write (evdatalist->fd, evdatalist->data, evdatalist->size);
             if (res < 0) {
@@ -181,6 +181,7 @@ void signalarmhandle () { // 发送hello包，确保数据连接还活着。
     }
     pthread_mutex_unlock (&mutex);
     sem_post(&sem);
+    fflush (stdout);
 }
 
 int sonprocess () {
@@ -237,6 +238,7 @@ int sonprocess () {
                     printf ("read fail, len: %d, in %s, at %d\n", len,  __FILE__, __LINE__);
                     return -7;
                 } else if (len > 0) {
+                    // printf ("tcp package size is %d, in %s, at %d\n", len,  __FILE__, __LINE__);
                     struct EVENTDATALIST* evdatalist = (struct EVENTDATALIST*) malloc (sizeof (struct EVENTDATALIST));
                     if (evdatalist == NULL) {
                         printf ("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);

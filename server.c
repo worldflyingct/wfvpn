@@ -21,7 +21,7 @@
 // 定时器相关
 #include <sys/time.h>
 
-#define MAXDATASIZE       2048
+#define MAXDATASIZE       4096
 #define MAXTHREAD         1
 #define MAX_EVENT         64
 #define MAX_ACCEPT        64
@@ -280,6 +280,7 @@ void signalarmhandle () { // hello包检查，超过3
         }
     }
     pthread_rwlock_unlock (&rwlock);
+    fflush (stdout);
 }
 
 int main () {
@@ -345,6 +346,7 @@ int main () {
                     printf ("read fail, len: %d, in %s, at %d\n", len,  __FILE__, __LINE__);
                     removeclient (fd);
                 } else if (len > 0) {
+                    // printf ("tcp package size is %d, in %s, at %d\n", len,  __FILE__, __LINE__);
                     struct EVENTDATALIST* evdatalist = (struct EVENTDATALIST*) malloc (sizeof (struct EVENTDATALIST));
                     if (evdatalist == NULL) {
                         printf ("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
