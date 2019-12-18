@@ -37,9 +37,9 @@ struct CLIENTLIST {
 };
 struct CLIENTLIST* clientlisthead = NULL;
 struct CLIENTLIST* clientlisttail;
-int epollfd, tunfd, serverfd;
+int epollfd;
 
-int create_socketfd () {
+int create_socketfd (unsigned int port) {
     struct sockaddr_in sin;
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) {
@@ -49,7 +49,7 @@ int create_socketfd () {
     memset (&sin, 0, sizeof (struct sockaddr_in));
     sin.sin_family = AF_INET; // ipv4
     sin.sin_addr.s_addr = INADDR_ANY; // 本机任意ip
-    sin.sin_port = htons (serverport);
+    sin.sin_port = htons (port);
     if (bind (fd, (struct sockaddr *)&sin, sizeof(sin)) < 0) {
         printf ("bind port %d fail, in %s, at %d\n", serverport, __FILE__, __LINE__);
         return -2;
@@ -74,7 +74,7 @@ int addtoepoll (int fd) {
     struct epoll_event ev;
     memset (&ev, 0, sizeof (struct epoll_event));
     ev.data.fd = fd;
-    ev.events = EPOLLIN | EPOLLOUT | EPOLLERR | EPOLLHUP | EPOLLRDHUP | EPOLLET; // 水平触发，因为每个ip数据包的大小一定小于1500，所以一定可以一次读出全部数据
+    ev.events = EPOLLIN | EPOLLOUT | EPOLLERR | EPOLLHUP | EPOLLRDHUP | EPOLLET; // 边沿触发，保证尽量少的epoll事件
     return epoll_ctl (epollfd, EPOLL_CTL_ADD, fd, &ev);
 }
 
@@ -200,8 +200,6 @@ int readdata (int fd, unsigned char* readbuf, unsigned int len) {
                 }
             }
             if (clientlist != NULL) {
-                unsigned char data[] = { 0x23 };
-                write (fd, data, sizeof (data));
                 offset += packagesize;
                 printf ("client:%d is not login, in %s, at %d\n", fd,  __FILE__, __LINE__);
                 continue;
@@ -247,8 +245,6 @@ int readdata (int fd, unsigned char* readbuf, unsigned int len) {
             offset += packagesize;
         } else if (readbuf[offset] == 0x10) { // 绑定数据包
             if (memcmp (readbuf + offset + 1, password, 32)) { // 绑定密码错误
-                unsigned char data[] = { 0x20 };
-                write (fd, data, sizeof (data));
                 offset += 37; // 绑定包固定长度为37
                 printf ("password check fail, in %s, at %d\n",  __FILE__, __LINE__);
                 continue;
@@ -263,8 +259,6 @@ int readdata (int fd, unsigned char* readbuf, unsigned int len) {
                 }
             }
             if (!canuse) {
-                unsigned char data[] = { 0x21 };
-                write (fd, data, sizeof (data));
                 offset += 37; // 绑定包固定长度为37
                 printf ("ip %d.%d.%d.%d is exist, in %s, at %d\n", ip[0], ip[1], ip[2], ip[3],  __FILE__, __LINE__);
                 continue;
@@ -286,19 +280,18 @@ int readdata (int fd, unsigned char* readbuf, unsigned int len) {
             clientlisttail = clientlisttail->tail;
             offset += 37; // 绑定包固定长度为37
             printf ("add client success, client ip is %d.%d.%d.%d, in %s, at %d\n", ip[0], ip[1], ip[2], ip[3],  __FILE__, __LINE__);
-        } else if (readbuf[offset] == 0x11) { // hello包
-            offset += 1; // hello包固定长度为1
         }
     }
 }
 
 int main () {
+    static int tunfd, serverfd;
     tunfd = tun_alloc (); // 这里使用static是因为这个变量是不会被释放的，因此将这个数据放到数据段。
     if (tunfd < 0) {
         printf ("alloc tun fail, in %s, at %d\n",  __FILE__, __LINE__);
         return -1;
     }
-    serverfd = create_socketfd ();
+    serverfd = create_socketfd (serverport);
     if (serverfd < 0) {
         printf ("create socket fd fail, in %s, at %d\n",  __FILE__, __LINE__);
         return -2;
@@ -372,6 +365,7 @@ int main () {
                 }
                 if (clientlist->packagelisthead == NULL) {
                     clientlist->canwrite = 1;
+                    continue;
                 }
                 writenode (clientlist);
             } else {
