@@ -20,6 +20,17 @@ gcc -O3 -o server server.c
 gcc -O3 -o client client.c
 ```
 
+## iptables设置
+
+需要启动内核的路由转发以及端口的路由转发许可。
+```
+echo 1 > /proc/sys/net/ipv4/ip_forward
+
+iptables -A FORWARD -d 192.168.23.20/32 -p tcp --dport 80 -j ACCEPT
+iptables -t nat -A PREROUTING -p tcp --dport 80 -j DNAT --to 192.168.23.20:80
+iptables -t nat -A POSTROUTING -p tcp -d 192.168.23.20 --dport 80 -j MASQUERADE
+```
+
 ## 未来展望
 
 无，既然是自己使用的，肯定不会听从各网友朋友的建议，产品未来的规划更多的是根据公司的实际发展与实际需求决定。
