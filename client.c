@@ -1,4 +1,4 @@
-#define serverip          "47.110.163.33" // 服务器的地址，不支持域名
+#define serverip          "192.168.56.101" // 服务器的地址，不支持域名
 #define serverport        3478
 #define clientip          "192.168.23.20/24"
 #define password          "vCIhnEMbk9wgK4uUxCptm4bFxAAkGdTs" // 密码固定为32位
@@ -15,10 +15,9 @@
 #include <linux/if_tun.h>
 // 包入网络相关的头部
 #include <arpa/inet.h>
-// #include <netinet/in.h>
 #include <sys/epoll.h>
 
-#define MAXDATASIZE       32*1024*1024
+#define MAXDATASIZE       16*1024*1024
 #define MAX_EVENT         512
 #define MAX_ACCEPT        512
 
@@ -32,10 +31,11 @@ struct CLIENTLIST {
     int canwrite;
     struct PACKAGELIST* packagelisthead;
     struct PACKAGELIST* packagelisttail;
-    unsigned int totalsize;
+    unsigned char* remainpackage;
+    unsigned int remainsize;
 };
-struct CLIENTLIST tun = {0, 1, NULL, NULL, 0};
-struct CLIENTLIST client = {0, 1, NULL, NULL, 0};
+struct CLIENTLIST tun = {0, 1, NULL, NULL, NULL, 0};
+struct CLIENTLIST client = {0, 1, NULL, NULL, NULL, 0};
 int epollfd;
 
 int connect_socketfd (unsigned char* ip, unsigned int port) {
@@ -54,6 +54,10 @@ int connect_socketfd (unsigned char* ip, unsigned int port) {
     }
     sin.sin_addr.s_addr = _ip;
     sin.sin_port = htons (port);
+    if(connect (fd, (struct sockaddr*)&sin, sizeof(sin)) < 0) {
+        printf ("connect server fail, in %s, at %d\n", __FILE__, __LINE__);
+		return -5;
+	}
     int flags = fcntl (fd, F_GETFL, 0);
     if (flags < 0) {
         printf ("get flags fail, in %s, at %d\n", __FILE__, __LINE__);
@@ -63,10 +67,6 @@ int connect_socketfd (unsigned char* ip, unsigned int port) {
         printf ("set flags fail, in %s, at %d\n", __FILE__, __LINE__);
         return -4;
     }
-    if(connect (fd, (struct sockaddr*)&sin, sizeof(sin)) < 0) {
-        printf ("connect server fail, in %s, at %d\n", __FILE__, __LINE__);
-		return -3;
-	}
     return fd;
 }
 
@@ -90,13 +90,14 @@ int loginserver () {
     }
     printf ("virtual ip:%d.%d.%d.%d, in %s, at %d\n", data[33], data[34], data[35], data[36], __FILE__, __LINE__);
     write (client.fd, data, sizeof (data));
+    client.canwrite = 0;
 }
 
 int addtoepoll (int fd) {
     struct epoll_event ev;
     memset (&ev, 0, sizeof (struct epoll_event));
     ev.data.fd = fd;
-    ev.events = EPOLLIN | EPOLLOUT | EPOLLERR | EPOLLHUP | EPOLLRDHUP | EPOLLET; // 水平触发，因为每个ip数据包的大小一定小于1500，所以一定可以一次读出全部数据
+    ev.events = EPOLLIN | EPOLLOUT | EPOLLERR | EPOLLHUP | EPOLLRDHUP | EPOLLET; // 边沿触发，保证尽量少的epoll事件
     return epoll_ctl (epollfd, EPOLL_CTL_ADD, fd, &ev);
 }
 
@@ -124,42 +125,74 @@ int tun_alloc () {
 }
 
 int writenode (struct CLIENTLIST* clientlist) {
-    unsigned char* packages = (unsigned char*) malloc (clientlist->totalsize * sizeof (unsigned char));
-    if (packages == NULL) {
-        printf ("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
-        return -1;
-    }
-    unsigned int offset = 0;
     struct PACKAGELIST* packagelist = clientlist->packagelisthead;
     while (packagelist != NULL) {
-        memcpy (packages + offset, packagelist->package, packagelist->size);
-        offset += packagelist->size;
+        int len = write (clientlist->fd, packagelist->package, packagelist->size);
+        if (len < packagelist->size) { // 缓冲区不足，已无法继续写入数据。
+            printf ("write buff not enough, in %s, at %d\n",  __FILE__, __LINE__);
+            clientlist->canwrite = 0;
+            if (len != -1) {
+                unsigned int remainsize = packagelist->size - len;
+                unsigned char* remainpackage = (unsigned char*) malloc (remainsize * sizeof (unsigned char));
+                struct PACKAGELIST* remainpackagelist = (struct PACKAGELIST*) malloc (sizeof (struct PACKAGELIST));
+                memcpy (remainpackage, packagelist->package + len, remainsize);
+                remainpackagelist->package = remainpackage;
+                remainpackagelist->size = remainsize;
+                remainpackagelist->tail = packagelist->tail;
+                struct PACKAGELIST* tmppackagelist = packagelist;
+                packagelist = remainpackagelist;
+                free (tmppackagelist->package);
+                free (tmppackagelist);
+            }
+            break;
+        }
         struct PACKAGELIST* tmppackagelist = packagelist;
         packagelist = packagelist->tail;
         free (tmppackagelist->package);
         free (tmppackagelist);
     }
-    write (clientlist->fd, packages, clientlist->totalsize);
-    clientlist->packagelisthead = NULL;
-    clientlist->totalsize = 0;
-    clientlist->canwrite = 0;
-    free (packages);
-    return 0;
+    clientlist->packagelisthead = packagelist;
 }
 
 int readdata (int fd, unsigned char* readbuf, unsigned int len) {
+    struct CLIENTLIST* clientlist, *targetlist;
+    if (fd == tun.fd) {
+        clientlist = &tun;
+        targetlist = &client;
+    } else {
+        clientlist = &client;
+        targetlist = &tun;
+    }
+    unsigned int totalsize = clientlist->remainsize + len;
+    unsigned char* buff = (unsigned char*) malloc (totalsize * sizeof (unsigned char));
+    if (clientlist->remainsize) {
+        memcpy (buff, clientlist->remainpackage, clientlist->remainsize);
+        memcpy (buff+clientlist->remainsize, readbuf, len);
+        free (clientlist->remainpackage);
+        clientlist->remainsize = 0;
+    } else {
+        memcpy (buff, readbuf, len);
+    }
     unsigned int offset = 0;
-    while (offset < len) {
-        if ((readbuf[offset] & 0xf0) == 0x40) { // ipv4数据包
-            unsigned int packagesize = 256*readbuf[offset+2] + readbuf[offset+3]; // 数据包大小
-            struct CLIENTLIST* targetclient = (fd == tun.fd) ? &client : &tun;
+    while (offset < totalsize) {
+        if ((buff[offset] & 0xf0) == 0x40) { // ipv4数据包
+            unsigned int packagesize = 256*buff[offset+2] + buff[offset+3]; // 数据包大小
+            if (offset + packagesize > totalsize) { // 数据包不全
+                unsigned int remainsize = totalsize-offset;
+                unsigned char* remainpackage = (unsigned char*) malloc (remainsize * sizeof (unsigned char));
+                memcpy (remainpackage, buff+offset, remainsize);
+                clientlist->remainsize = remainsize;
+                clientlist->remainpackage = remainpackage;
+                offset += packagesize;
+                continue;
+            }
             unsigned char* package = (unsigned char*) malloc (packagesize * sizeof (unsigned char));
             if (package == NULL) {
                 offset += packagesize;
                 printf ("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
                 continue;
             }
-            memcpy (package, readbuf + offset, packagesize);
+            memcpy (package, buff + offset, packagesize);
             struct PACKAGELIST* packagelist = (struct PACKAGELIST*) malloc (sizeof (struct PACKAGELIST));
             if (packagelist == NULL) {
                 free (package);
@@ -170,20 +203,33 @@ int readdata (int fd, unsigned char* readbuf, unsigned int len) {
             packagelist->package = package;
             packagelist->size = packagesize;
             packagelist->tail = NULL;
-            if (targetclient->packagelisthead == NULL) {
-                targetclient->packagelisthead = packagelist;
-                targetclient->packagelisttail = targetclient->packagelisthead;
+            if (targetlist->packagelisthead == NULL) {
+                targetlist->packagelisthead = packagelist;
+                targetlist->packagelisttail = targetlist->packagelisthead;
             } else {
-                targetclient->packagelisttail->tail = packagelist;
-                targetclient->packagelisttail = targetclient->packagelisttail->tail;
+                targetlist->packagelisttail->tail = packagelist;
+                targetlist->packagelisttail = targetlist->packagelisttail->tail;
             }
-            targetclient->totalsize += packagelist->size;
-            if (targetclient->canwrite) { // 当前socket可写
-                writenode (targetclient);
+            if (targetlist->canwrite) { // 当前socket可写
+                writenode (targetlist);
             }
             offset += packagesize;
+        } else if ((buff[offset] & 0xf0) == 0x60) { // ipv6数据包，不知道给谁的，直接扔
+            unsigned int packagesize = 256*buff[offset+4] + buff[offset+5] + 40; // 数据包大小
+            if (offset + packagesize > totalsize) { // 数据包不全
+                unsigned int remainsize = totalsize-offset;
+                unsigned char* remainpackage = (unsigned char*) malloc (remainsize * sizeof (unsigned char));
+                memcpy (remainpackage, buff+offset, remainsize);
+                clientlist->remainsize = remainsize;
+                clientlist->remainpackage = remainpackage;
+                offset += packagesize;
+                continue;
+            }
+            offset += packagesize;
+            printf ("ipv6 package, size:%d, in %s, at %d\n", packagesize,  __FILE__, __LINE__);
         }
     }
+    free (buff);
 }
 
 int sonprocess () {
@@ -228,6 +274,7 @@ int sonprocess () {
                 printf ("receive error event 0x%08x, in %s, at %d\n", evs[i].events,  __FILE__, __LINE__);
                 return -6;
             } else if (events & EPOLLIN) {
+                printf ("fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
                 static char readbuf[MAXDATASIZE]; // 这里使用static关键词是为了将数据存储与数据段，减小对栈空间的压力。
                 int len = read (fd, readbuf, sizeof (readbuf));
                 if (len <= 0) {
@@ -239,12 +286,14 @@ int sonprocess () {
                 }
                 readdata (fd, readbuf, len);
             } else if (events & EPOLLOUT) {
-                struct CLIENTLIST* targetclient = (fd == tun.fd) ? &tun : &client;
-                if (targetclient->packagelisthead == NULL) {
-                    targetclient->canwrite = 1;
-                    continue;
+                printf ("fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
+                if (fd == tun.fd) {
+                    tun.canwrite = 1;
+                    writenode (&tun);
+                } else {
+                    client.canwrite = 1;
+                    writenode (&client);
                 }
-                writenode (targetclient);
             } else {
                 printf ("receive new event 0x%08x, in %s, at %d\n", evs[i].events,  __FILE__, __LINE__);
             }
