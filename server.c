@@ -168,6 +168,7 @@ int writenode (struct CLIENTLIST* clientlist) {
     struct PACKAGELIST* packagelist = clientlist->packagelisthead;
     while (packagelist != NULL) {
         int len = write (clientlist->fd, packagelist->package, packagelist->size);
+        // printf ("write fd:%d, package:0x%02x, 0x%02x, 0x%02x, 0x%02x, 0x%02x, 0x%02x, in %s, at %d\n", clientlist->fd, packagelist->package[0], packagelist->package[1], packagelist->package[2], packagelist->package[3], packagelist->package[4], packagelist->package[5],  __FILE__, __LINE__);
         if (len < packagelist->size) { // 缓冲区不足，已无法继续写入数据。
             printf ("write buff not enough, in %s, at %d\n",  __FILE__, __LINE__);
             clientlist->canwrite = 0;
@@ -195,7 +196,13 @@ int writenode (struct CLIENTLIST* clientlist) {
     return 0;
 }
 
-int readdata (int fd, unsigned char* readbuf, unsigned int len) {
+int readdata (int fd) {
+    static unsigned char readbuf[MAXDATASIZE]; // 这里使用static关键词是为了将数据存储与数据段，减小对栈空间的压力。
+    unsigned int len = read (fd, readbuf, MAXDATASIZE);
+    if (len <= 0) {
+        printf ("read fail, len: %d, in %s, at %d\n", len,  __FILE__, __LINE__);
+        return -1;
+    }
     struct CLIENTLIST* clientlist;
     for (clientlist = clientlisthead ; clientlist != NULL ; clientlist = clientlist->tail) {
         if (fd == clientlist->fd) {
@@ -206,12 +213,12 @@ int readdata (int fd, unsigned char* readbuf, unsigned int len) {
     if (clientlist == NULL) { // 用户没有找到
         if (readbuf[offset] != 0x10) { // 只能执行登录操作
             printf ("just can run login, in %s, at %d\n",  __FILE__, __LINE__);
-            return -1;
+            return -2;
         }
         if (memcmp (readbuf + offset + 1, password, 32)) { // 绑定密码错误
             offset += 37; // 绑定包固定长度为37
             printf ("password check fail, in %s, at %d\n",  __FILE__, __LINE__);
-            return -1;
+            return -3;
         }
         unsigned char ip[4];
         memcpy(ip, readbuf+offset+33, 4);
@@ -225,13 +232,13 @@ int readdata (int fd, unsigned char* readbuf, unsigned int len) {
         if (!canuse) {
             offset += 37; // 绑定包固定长度为37
             printf ("ip %d.%d.%d.%d is exist, in %s, at %d\n", ip[0], ip[1], ip[2], ip[3],  __FILE__, __LINE__);
-            return -2;
+            return -4;
         }
         clientlist = (struct CLIENTLIST*) malloc (sizeof (struct CLIENTLIST));
         if (clientlist == NULL) {
             offset += 37; // 绑定包固定长度为37
             printf ("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
-            return -3;
+            return -5;
         }
         clientlist->fd = fd;
         memcpy (clientlist->ip, readbuf+offset+33, 4);
@@ -250,13 +257,13 @@ int readdata (int fd, unsigned char* readbuf, unsigned int len) {
     if (clientlist->remainsize) {
         memcpy (buff, clientlist->remainpackage, clientlist->remainsize);
         memcpy (buff+clientlist->remainsize, readbuf, len);
-        printf ("last data, buff[%d]:%d, fd:%d, in %s, at %d\n", offset, buff[offset], fd,  __FILE__, __LINE__);
+        printf ("last data, offset:%d, remainsize:%d, buff[%d]:0x%02x, fd:%d, in %s, at %d\n", offset, clientlist->remainsize, offset, buff[offset], fd,  __FILE__, __LINE__);
         free (clientlist->remainpackage);
         clientlist->remainsize = 0;
     } else {
         memcpy (buff, readbuf, len);
     }
-    printf ("last data, buff[%d]:%d, fd:%d, in %s, at %d\n", offset, buff[offset], fd,  __FILE__, __LINE__);
+    // printf ("read, fd:%d, package:0x%02x, 0x%02x, 0x%02x, 0x%02x, 0x%02x, 0x%02x, in %s, at %d\n", fd, buff[0], buff[1], buff[2], buff[3], buff[4], buff[5],  __FILE__, __LINE__);
     while (offset < len) {
         if ((buff[offset] & 0xf0) == 0x40) { // ipv4数据包
             unsigned int packagesize = 256*buff[offset+2] + buff[offset+3]; // 数据包大小
@@ -349,10 +356,11 @@ int readdata (int fd, unsigned char* readbuf, unsigned int len) {
             offset += packagesize;
             printf ("ipv6 package size:%d, in %s, at %d\n", packagesize,  __FILE__, __LINE__);
         } else {
-            printf ("offset:%d, fd:%d, buff:0x%02x, in %s, at %d\n", offset, fd, buff[0],  __FILE__, __LINE__);
+            printf ("unknown package, offset:%d, fd:%d, buff:0x%02x, in %s, at %d\n", offset, fd, buff[0],  __FILE__, __LINE__);
         }
     }
     free (buff);
+    return 0;
 }
 
 int main () {
@@ -384,9 +392,7 @@ int main () {
     while (1) {
         static struct epoll_event evs[MAX_EVENT];
         static int wait_count;
-        printf ("in %s, at %d\n",  __FILE__, __LINE__);
         wait_count = epoll_wait (epollfd, evs, MAX_EVENT, -1);
-        printf ("wait_count:%d, in %s, at %d\n", wait_count,  __FILE__, __LINE__);
         for (int i = 0 ; i < wait_count ; i++) {
             int fd = evs[i].data.fd;
             unsigned int events = evs[i].events;
@@ -418,17 +424,12 @@ int main () {
                     continue;
                 }
             } else if (events & EPOLLIN) { // 数据可读
-                printf ("fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
                 static unsigned char readbuf[MAXDATASIZE]; // 这里使用static关键词是为了将数据存储与数据段，减小对栈空间的压力。
-                int len = read (fd, readbuf, sizeof (readbuf));
-                if (len <= 0) {
-                    printf ("read fail, len: %d, in %s, at %d\n", len,  __FILE__, __LINE__);
+                if (readdata (fd)) {
                     removeclient (epollfd, fd);
                     continue;
                 }
-                readdata (fd, readbuf, len);
             } else if (events & EPOLLOUT) { // 数据可写
-                printf ("fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
                 struct CLIENTLIST* clientlist;
                 for (clientlist = clientlisthead ; clientlist != NULL ; clientlist = clientlist->tail) {
                     if (fd == clientlist->fd) {

@@ -128,6 +128,7 @@ int writenode (struct CLIENTLIST* clientlist) {
     struct PACKAGELIST* packagelist = clientlist->packagelisthead;
     while (packagelist != NULL) {
         int len = write (clientlist->fd, packagelist->package, packagelist->size);
+        // printf ("write fd:%d, package:0x%02x, 0x%02x, 0x%02x, 0x%02x, 0x%02x, 0x%02x, in %s, at %d\n", clientlist->fd, packagelist->package[0], packagelist->package[1], packagelist->package[2], packagelist->package[3], packagelist->package[4], packagelist->package[5],  __FILE__, __LINE__);
         if (len < packagelist->size) { // 缓冲区不足，已无法继续写入数据。
             printf ("write buff not enough, in %s, at %d\n",  __FILE__, __LINE__);
             clientlist->canwrite = 0;
@@ -152,9 +153,16 @@ int writenode (struct CLIENTLIST* clientlist) {
         free (tmppackagelist);
     }
     clientlist->packagelisthead = packagelist;
+    return 0;
 }
 
-int readdata (int fd, unsigned char* readbuf, unsigned int len) {
+int readdata (int fd) {
+    static unsigned char readbuf[MAXDATASIZE]; // 这里使用static关键词是为了将数据存储与数据段，减小对栈空间的压力。
+    unsigned int len = read (fd, readbuf, MAXDATASIZE);
+    if (len <= 0) {
+        printf ("read fail, len: %d, in %s, at %d\n", len,  __FILE__, __LINE__);
+        return -1;
+    }
     struct CLIENTLIST* clientlist, *targetlist;
     if (fd == tun.fd) {
         clientlist = &tun;
@@ -168,16 +176,19 @@ int readdata (int fd, unsigned char* readbuf, unsigned int len) {
     if (clientlist->remainsize) {
         memcpy (buff, clientlist->remainpackage, clientlist->remainsize);
         memcpy (buff+clientlist->remainsize, readbuf, len);
+        printf ("last data, offset:0, remainsize:%d, buff[0]:0x%02x, fd:%d, in %s, at %d\n", clientlist->remainsize, buff[0], fd,  __FILE__, __LINE__);
         free (clientlist->remainpackage);
         clientlist->remainsize = 0;
     } else {
         memcpy (buff, readbuf, len);
     }
+    // printf ("read fd:%d, package:0x%02x, 0x%02x, 0x%02x, 0x%02x, 0x%02x, 0x%02x, in %s, at %d\n", fd, buff[0], buff[1], buff[2], buff[3], buff[4], buff[5],  __FILE__, __LINE__);
     unsigned int offset = 0;
     while (offset < totalsize) {
         if ((buff[offset] & 0xf0) == 0x40) { // ipv4数据包
             unsigned int packagesize = 256*buff[offset+2] + buff[offset+3]; // 数据包大小
             if (offset + packagesize > totalsize) { // 数据包不全
+                printf ("data not completely, totalsize:%d, offset:%d, packagesize:%d, fd:%d, in %s, at %d\n", totalsize, offset, packagesize, fd,  __FILE__, __LINE__);
                 unsigned int remainsize = totalsize-offset;
                 unsigned char* remainpackage = (unsigned char*) malloc (remainsize * sizeof (unsigned char));
                 memcpy (remainpackage, buff+offset, remainsize);
@@ -217,6 +228,7 @@ int readdata (int fd, unsigned char* readbuf, unsigned int len) {
         } else if ((buff[offset] & 0xf0) == 0x60) { // ipv6数据包，不知道给谁的，直接扔
             unsigned int packagesize = 256*buff[offset+4] + buff[offset+5] + 40; // 数据包大小
             if (offset + packagesize > totalsize) { // 数据包不全
+                printf ("data not completely, totalsize:%d, offset:%d, packagesize:%d, fd:%d, in %s, at %d\n", totalsize, offset, packagesize, fd,  __FILE__, __LINE__);
                 unsigned int remainsize = totalsize-offset;
                 unsigned char* remainpackage = (unsigned char*) malloc (remainsize * sizeof (unsigned char));
                 memcpy (remainpackage, buff+offset, remainsize);
@@ -230,6 +242,7 @@ int readdata (int fd, unsigned char* readbuf, unsigned int len) {
         }
     }
     free (buff);
+    return 0;
 }
 
 int sonprocess () {
@@ -274,19 +287,13 @@ int sonprocess () {
                 printf ("receive error event 0x%08x, in %s, at %d\n", evs[i].events,  __FILE__, __LINE__);
                 return -6;
             } else if (events & EPOLLIN) {
-                printf ("fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
-                static char readbuf[MAXDATASIZE]; // 这里使用static关键词是为了将数据存储与数据段，减小对栈空间的压力。
-                int len = read (fd, readbuf, sizeof (readbuf));
-                if (len <= 0) {
+                if (readdata (fd)) {
                     close (tunfd);
                     close (clientfd);
                     close (epollfd);
-                    printf ("read fail, len: %d, in %s, at %d\n", len,  __FILE__, __LINE__);
                     return -7;
                 }
-                readdata (fd, readbuf, len);
             } else if (events & EPOLLOUT) {
-                printf ("fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
                 if (fd == tun.fd) {
                     tun.canwrite = 1;
                     writenode (&tun);
