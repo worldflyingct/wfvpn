@@ -9,7 +9,6 @@
 #include <stdlib.h>
 #include <sys/ioctl.h>
 #include <string.h>
-#include <sys/wait.h>
 // 包入tun相关的头部
 #include <net/if.h>
 #include <linux/if_tun.h>
