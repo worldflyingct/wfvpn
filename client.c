@@ -31,11 +31,12 @@ struct CLIENTLIST {
     int canwrite;
     struct PACKAGELIST* packagelisthead;
     struct PACKAGELIST* packagelisttail;
+    unsigned int totalsize;
     unsigned char* remainpackage;
     unsigned int remainsize;
 };
-struct CLIENTLIST tun = {0, 1, NULL, NULL, NULL, 0};
-struct CLIENTLIST client = {0, 1, NULL, NULL, NULL, 0};
+struct CLIENTLIST tun = {0, 1, NULL, NULL, 0, NULL, 0};
+struct CLIENTLIST client = {0, 1, NULL, NULL, 0, NULL, 0};
 int epollfd;
 
 int connect_socketfd (unsigned char* ip, unsigned int port) {
@@ -90,7 +91,6 @@ int loginserver () {
     }
     printf ("virtual ip:%d.%d.%d.%d, in %s, at %d\n", data[33], data[34], data[35], data[36], __FILE__, __LINE__);
     write (client.fd, data, sizeof (data));
-    client.canwrite = 0;
 }
 
 int addtoepoll (int fd) {
@@ -126,31 +126,51 @@ int tun_alloc () {
 
 int writenode (struct CLIENTLIST* clientlist) {
     struct PACKAGELIST* packagelist = clientlist->packagelisthead;
+    printf ("totalsize:%d, in %s, at %d\n", clientlist->totalsize,  __FILE__, __LINE__);
+    unsigned char* packages = (unsigned char*) malloc (clientlist->totalsize * sizeof (unsigned char));
+    if (packages == NULL) {
+        printf ("malloc fail, len:%d, in %s, at %d\n", clientlist->totalsize,  __FILE__, __LINE__);
+        return -6;
+    }
+    unsigned int offset = 0;
     while (packagelist != NULL) {
-        int len = write (clientlist->fd, packagelist->package, packagelist->size);
-        // printf ("write fd:%d, package:0x%02x, 0x%02x, 0x%02x, 0x%02x, 0x%02x, 0x%02x, in %s, at %d\n", clientlist->fd, packagelist->package[0], packagelist->package[1], packagelist->package[2], packagelist->package[3], packagelist->package[4], packagelist->package[5],  __FILE__, __LINE__);
-        if (len < packagelist->size) { // 缓冲区不足，已无法继续写入数据。
-            printf ("write buff not enough, in %s, at %d\n",  __FILE__, __LINE__);
-            clientlist->canwrite = 0;
-            if (len != -1) {
-                unsigned int remainsize = packagelist->size - len;
-                unsigned char* remainpackage = (unsigned char*) malloc (remainsize * sizeof (unsigned char));
-                struct PACKAGELIST* remainpackagelist = (struct PACKAGELIST*) malloc (sizeof (struct PACKAGELIST));
-                memcpy (remainpackage, packagelist->package + len, remainsize);
-                remainpackagelist->package = remainpackage;
-                remainpackagelist->size = remainsize;
-                remainpackagelist->tail = packagelist->tail;
-                struct PACKAGELIST* tmppackagelist = packagelist;
-                packagelist = remainpackagelist;
-                free (tmppackagelist->package);
-                free (tmppackagelist);
-            }
-            break;
-        }
+        memcpy (packages+offset, packagelist->package, packagelist->size);
+        offset += packagelist->size;
         struct PACKAGELIST* tmppackagelist = packagelist;
         packagelist = packagelist->tail;
         free (tmppackagelist->package);
         free (tmppackagelist);
+    }
+    printf ("fd:%d, size:%d, in %s, at %d\n", clientlist->fd, clientlist->totalsize,  __FILE__, __LINE__);
+    int len = write (clientlist->fd, packages, clientlist->totalsize);
+    if (len < clientlist->totalsize) { // 缓冲区不足，已无法继续写入数据。
+        printf ("write buff not enough, in %s, at %d\n",  __FILE__, __LINE__);
+        clientlist->canwrite = 0;
+        if (len > 0) {
+            unsigned int size = clientlist->totalsize-len;
+            memcpy (packages, packages+len, size);
+            free (packages);
+            packages = (unsigned char*) malloc (size * sizeof (unsigned char));
+            if (packages == NULL) {
+                printf ("malloc fail, size:%d, in %s, at %d\n", size,  __FILE__, __LINE__);
+                return -6;
+            }
+            packagelist = (struct PACKAGELIST*) malloc (sizeof (struct PACKAGELIST));
+            if (packagelist == NULL) {
+                printf ("malloc fail, in %s, at %d\n", size,  __FILE__, __LINE__);
+                return -6;
+            }
+            packagelist->package = packages;
+            packagelist->size = size;
+            packagelist->tail = NULL;
+            clientlist->totalsize = packagelist->size;
+        } else {
+            free (packages);
+            clientlist->totalsize = 0;
+        }
+    } else {
+        free (packages);
+        clientlist->totalsize = 0;
     }
     clientlist->packagelisthead = packagelist;
     return 0;
@@ -221,6 +241,7 @@ int readdata (int fd) {
                 targetlist->packagelisttail->tail = packagelist;
                 targetlist->packagelisttail = targetlist->packagelisttail->tail;
             }
+            targetlist->totalsize += packagelist->size;
             if (targetlist->canwrite) { // 当前socket可写
                 writenode (targetlist);
             }
@@ -245,7 +266,7 @@ int readdata (int fd) {
     return 0;
 }
 
-int sonprocess () {
+int main () {
     static int tunfd, clientfd;
     tunfd = tun_alloc (); // 这里使用static是因为这个变量是不会被释放的，因此将这个数据放到数据段。
     if (tunfd < 0) {
@@ -304,19 +325,6 @@ int sonprocess () {
             } else {
                 printf ("receive new event 0x%08x, in %s, at %d\n", evs[i].events,  __FILE__, __LINE__);
             }
-        }
-    }
-    return 0;
-}
-
-int main () {
-    while (1) {
-        int pid = fork ();
-        if (pid > 0) { // 父进程
-            wait (NULL);
-            sleep (2);
-        } else { // 子进程
-            return sonprocess ();
         }
     }
     return 0;

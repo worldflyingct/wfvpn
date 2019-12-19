@@ -31,6 +31,7 @@ struct CLIENTLIST {
     unsigned char ip[4];
     struct PACKAGELIST* packagelisthead;
     struct PACKAGELIST* packagelisttail;
+    unsigned int totalsize;
     unsigned char* remainpackage;
     unsigned int remainsize;
     struct CLIENTLIST *head;
@@ -143,6 +144,7 @@ int tun_alloc () {
     clientlisthead->fd = fd;
     clientlisthead->canwrite = 1;
     clientlisthead->packagelisthead = NULL;
+    clientlisthead->totalsize = 0;
     clientlisthead->remainsize = 0;
     int addr = 0;
     unsigned char ipaddr = 0;
@@ -166,31 +168,51 @@ int tun_alloc () {
 
 int writenode (struct CLIENTLIST* clientlist) {
     struct PACKAGELIST* packagelist = clientlist->packagelisthead;
+    printf ("totalsize:%d, in %s, at %d\n", clientlist->totalsize,  __FILE__, __LINE__);
+    unsigned char* packages = (unsigned char*) malloc (clientlist->totalsize * sizeof (unsigned char));
+    if (packages == NULL) {
+        printf ("malloc fail, len:%d, in %s, at %d\n", clientlist->totalsize,  __FILE__, __LINE__);
+        return -6;
+    }
+    unsigned int offset = 0;
     while (packagelist != NULL) {
-        int len = write (clientlist->fd, packagelist->package, packagelist->size);
-        // printf ("write fd:%d, package:0x%02x, 0x%02x, 0x%02x, 0x%02x, 0x%02x, 0x%02x, in %s, at %d\n", clientlist->fd, packagelist->package[0], packagelist->package[1], packagelist->package[2], packagelist->package[3], packagelist->package[4], packagelist->package[5],  __FILE__, __LINE__);
-        if (len < packagelist->size) { // 缓冲区不足，已无法继续写入数据。
-            printf ("write buff not enough, in %s, at %d\n",  __FILE__, __LINE__);
-            clientlist->canwrite = 0;
-            if (len != -1) {
-                unsigned int remainsize = packagelist->size - len;
-                unsigned char* remainpackage = (unsigned char*) malloc (remainsize * sizeof (unsigned char));
-                memcpy (remainpackage, packagelist->package + len, remainsize);
-                struct PACKAGELIST* remainpackagelist = (struct PACKAGELIST*) malloc (sizeof (struct PACKAGELIST));
-                remainpackagelist->package = remainpackage;
-                remainpackagelist->size = remainsize;
-                remainpackagelist->tail = packagelist->tail;
-                struct PACKAGELIST* tmppackagelist = packagelist;
-                packagelist = remainpackagelist;
-                free (tmppackagelist->package);
-                free (tmppackagelist);
-            }
-            break;
-        }
+        memcpy (packages+offset, packagelist->package, packagelist->size);
+        offset += packagelist->size;
         struct PACKAGELIST* tmppackagelist = packagelist;
         packagelist = packagelist->tail;
         free (tmppackagelist->package);
         free (tmppackagelist);
+    }
+    printf ("fd:%d, size:%d, in %s, at %d\n", clientlist->fd, clientlist->totalsize,  __FILE__, __LINE__);
+    int len = write (clientlist->fd, packages, clientlist->totalsize);
+    if (len < clientlist->totalsize) { // 缓冲区不足，已无法继续写入数据。
+        printf ("write buff not enough, in %s, at %d\n",  __FILE__, __LINE__);
+        clientlist->canwrite = 0;
+        if (len > 0) {
+            unsigned int size = clientlist->totalsize-len;
+            memcpy (packages, packages+len, size);
+            free (packages);
+            packages = (unsigned char*) malloc (size * sizeof (unsigned char));
+            if (packages == NULL) {
+                printf ("malloc fail, size:%d, in %s, at %d\n", size,  __FILE__, __LINE__);
+                return -6;
+            }
+            packagelist = (struct PACKAGELIST*) malloc (sizeof (struct PACKAGELIST));
+            if (packagelist == NULL) {
+                printf ("malloc fail, in %s, at %d\n", size,  __FILE__, __LINE__);
+                return -6;
+            }
+            packagelist->package = packages;
+            packagelist->size = size;
+            packagelist->tail = NULL;
+            clientlist->totalsize = packagelist->size;
+        } else {
+            free (packages);
+            clientlist->totalsize = 0;
+        }
+    } else {
+        free (packages);
+        clientlist->totalsize = 0;
     }
     clientlist->packagelisthead = packagelist;
     return 0;
@@ -323,6 +345,7 @@ int readdata (int fd) {
                 clientlist->packagelisttail->tail = packagelist;
                 clientlist->packagelisttail = clientlist->packagelisttail->tail;
             }
+            clientlist->totalsize += packagelist->size;
             if (clientlist->canwrite) { // 当前socket可写
                 writenode (clientlist);
             }
