@@ -15,7 +15,7 @@
 #include <arpa/inet.h>
 #include <sys/epoll.h>
 
-#define MAXDATASIZE       16*1024*1024
+#define MAXDATASIZE       8*1024*1024
 #define MAX_EVENT         512
 #define MAX_ACCEPT        512
 #define MAX_CONNECT       256
@@ -234,6 +234,13 @@ int writenode (int epollfd, struct CLIENTLIST* clientlist) {
     return 0;
 }
 
+void saveincompletepackage (unsigned int remainsize, unsigned char* buff, struct CLIENTLIST* clientlist) {
+    unsigned char* remainpackage = (unsigned char*) malloc (remainsize * sizeof (unsigned char));
+    memcpy (remainpackage, buff, remainsize);
+    clientlist->remainsize = remainsize;
+    clientlist->remainpackage = remainpackage;
+}
+
 int readdata (int epollfd, int fd) {
     static unsigned char readbuf[MAXDATASIZE]; // 这里使用static关键词是为了将数据存储与数据段，减小对栈空间的压力。
     unsigned int len = read (fd, readbuf, MAXDATASIZE);
@@ -304,20 +311,12 @@ int readdata (int epollfd, int fd) {
     while (offset < totalsize) {
         if ((buff[offset] & 0xf0) == 0x40) { // ipv4数据包
             if (offset + 20 > totalsize) { // ipv4数据包头部就最小20个字节
-                unsigned int remainsize = totalsize-offset;
-                unsigned char* remainpackage = (unsigned char*) malloc (remainsize * sizeof (unsigned char));
-                memcpy (remainpackage, buff+offset, remainsize);
-                clientlist->remainsize = remainsize;
-                clientlist->remainpackage = remainpackage;
+                saveincompletepackage (totalsize-offset, buff+offset, clientlist);
                 break;
             }
             unsigned int packagesize = 256*buff[offset+2] + buff[offset+3]; // 数据包大小
             if (offset + packagesize > totalsize) { // 数据包不全
-                unsigned int remainsize = totalsize-offset;
-                unsigned char* remainpackage = (unsigned char*) malloc (remainsize * sizeof (unsigned char));
-                memcpy (remainpackage, buff+offset, remainsize);
-                clientlist->remainsize = remainsize;
-                clientlist->remainpackage = remainpackage;
+                saveincompletepackage (totalsize-offset, buff+offset, clientlist);
                 break;
             }
             struct CLIENTLIST* clientlist;
@@ -372,11 +371,7 @@ int readdata (int epollfd, int fd) {
             }
         } else if (buff[offset] == 0x10) { // 绑定数据包
             if (offset + 37 > totalsize) { // 绑定包固定长度为37
-                unsigned int remainsize = totalsize-offset;
-                unsigned char* remainpackage = (unsigned char*) malloc (remainsize * sizeof (unsigned char));
-                memcpy (remainpackage, buff+offset, remainsize);
-                clientlist->remainsize = remainsize;
-                clientlist->remainpackage = remainpackage;
+                saveincompletepackage (totalsize-offset, buff+offset, clientlist);
                 break;
             }
             offset += 37;
@@ -392,17 +387,13 @@ int readdata (int epollfd, int fd) {
             }
             unsigned int packagesize = 256*buff[offset+4] + buff[offset+5] + 40; // 数据包大小
             if (offset + packagesize > totalsize) { // 数据包不全
-                unsigned int remainsize = totalsize-offset;
-                unsigned char* remainpackage = (unsigned char*) malloc (remainsize * sizeof (unsigned char));
-                memcpy (remainpackage, buff+offset, remainsize);
-                clientlist->remainsize = remainsize;
-                clientlist->remainpackage = remainpackage;
+                saveincompletepackage (totalsize-offset, buff+offset, clientlist);
                 break;
             }
             offset += packagesize;
             printf ("ipv6 package size:%d, in %s, at %d\n", packagesize,  __FILE__, __LINE__);
         } else {
-            printf ("unknown package, offset:%d, fd:%d, buff:0x%02x,0x%02x,0x%02x,0x%02x,0x%02x, in %s, at %d\n", offset, fd, buff[offset], buff[offset+1], buff[offset+2], buff[offset+3], buff[offset+4],  __FILE__, __LINE__);
+            printf ("unknown package, offset:%d, fd:%d, buff:0x%02x,0x%02x,0x%02x,0x%02x,0x%02x,0x%02x,0x%02x,0x%02x, in %s, at %d\n", offset, fd, buff[offset], buff[offset+1], buff[offset+2], buff[offset+3], buff[offset+4], buff[offset+5], buff[offset+6], buff[offset+7],  __FILE__, __LINE__);
             exit (0);
         }
     }
