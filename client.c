@@ -37,7 +37,19 @@ struct CLIENTLIST {
 };
 struct CLIENTLIST tun = {0, 1, NULL, NULL, 0, NULL, 0};
 struct CLIENTLIST client = {0, 1, NULL, NULL, 0, NULL, 0};
-int epollfd;
+
+int setnonblocking (int fd) {
+    int flags = fcntl (fd, F_GETFL, 0);
+    if (flags < 0) {
+        printf ("get flags fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
+        return -1;
+    }
+    if(fcntl (fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+        printf ("set flags fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
+        return -1;
+    }
+    return 0;
+}
 
 int connect_socketfd (unsigned char* ip, unsigned int port) {
     struct sockaddr_in sin;
@@ -59,15 +71,6 @@ int connect_socketfd (unsigned char* ip, unsigned int port) {
         printf ("connect server fail, in %s, at %d\n", __FILE__, __LINE__);
 		return -5;
 	}
-    int flags = fcntl (fd, F_GETFL, 0);
-    if (flags < 0) {
-        printf ("get flags fail, in %s, at %d\n", __FILE__, __LINE__);
-        return -3;
-    }
-    if(fcntl (fd, F_SETFL, flags | O_NONBLOCK) < 0) {
-        printf ("set flags fail, in %s, at %d\n", __FILE__, __LINE__);
-        return -4;
-    }
     return fd;
 }
 
@@ -93,16 +96,24 @@ int loginserver () {
     write (client.fd, data, sizeof (data));
 }
 
-int addtoepoll (int fd) {
+int addtoepoll (int epollfd, int fd) {
     struct epoll_event ev;
-    memset (&ev, 0, sizeof (struct epoll_event));
+    // memset (&ev, 0, sizeof (struct epoll_event));
     ev.data.fd = fd;
-    ev.events = EPOLLIN | EPOLLOUT | EPOLLERR | EPOLLHUP | EPOLLRDHUP | EPOLLET; // 边沿触发，保证尽量少的epoll事件
+    ev.events = EPOLLIN | EPOLLERR | EPOLLHUP | EPOLLRDHUP; // 水平触发，保证所有数据都能读到
     return epoll_ctl (epollfd, EPOLL_CTL_ADD, fd, &ev);
 }
 
+int modepoll (int epollfd, int fd, unsigned int flags) {
+    struct epoll_event ev;
+    // memset (&ev, 0, sizeof (struct epoll_event));
+    ev.data.fd = fd;
+    ev.events = EPOLLIN | EPOLLERR | EPOLLHUP | EPOLLRDHUP | flags; // 水平触发，保证所有数据都能读到
+    return epoll_ctl (epollfd, EPOLL_CTL_MOD, fd, &ev);
+}
+
 int tun_alloc () {
-    int fd = open ("/dev/net/tun", O_RDWR | O_NONBLOCK);
+    int fd = open ("/dev/net/tun", O_RDWR);
     if (fd < 0) {
         printf ("open tun node fail, in %s, at %d\n", __FILE__, __LINE__);
         return -1;
@@ -124,9 +135,8 @@ int tun_alloc () {
     return fd;
 }
 
-int writenode (struct CLIENTLIST* clientlist) {
+int writenode (int epollfd, struct CLIENTLIST* clientlist) {
     struct PACKAGELIST* packagelist = clientlist->packagelisthead;
-    printf ("totalsize:%d, in %s, at %d\n", clientlist->totalsize,  __FILE__, __LINE__);
     unsigned char* packages = (unsigned char*) malloc (clientlist->totalsize * sizeof (unsigned char));
     if (packages == NULL) {
         printf ("malloc fail, len:%d, in %s, at %d\n", clientlist->totalsize,  __FILE__, __LINE__);
@@ -141,42 +151,47 @@ int writenode (struct CLIENTLIST* clientlist) {
         free (tmppackagelist->package);
         free (tmppackagelist);
     }
-    printf ("fd:%d, size:%d, in %s, at %d\n", clientlist->fd, clientlist->totalsize,  __FILE__, __LINE__);
     int len = write (clientlist->fd, packages, clientlist->totalsize);
     if (len < clientlist->totalsize) { // 缓冲区不足，已无法继续写入数据。
-        printf ("write buff not enough, in %s, at %d\n",  __FILE__, __LINE__);
+        if (modepoll (epollfd, clientlist->fd, EPOLLOUT)) {
+            printf ("modepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
+            return -2;
+        }
         clientlist->canwrite = 0;
         if (len > 0) {
             unsigned int size = clientlist->totalsize-len;
-            memcpy (packages, packages+len, size);
-            free (packages);
-            packages = (unsigned char*) malloc (size * sizeof (unsigned char));
-            if (packages == NULL) {
+            unsigned char* packages2 = (unsigned char*) malloc (size * sizeof (unsigned char));
+            if (packages2 == NULL) {
                 printf ("malloc fail, size:%d, in %s, at %d\n", size,  __FILE__, __LINE__);
                 return -6;
             }
+            memcpy (packages2, packages+len, size);
+            free (packages);
             packagelist = (struct PACKAGELIST*) malloc (sizeof (struct PACKAGELIST));
             if (packagelist == NULL) {
                 printf ("malloc fail, in %s, at %d\n", size,  __FILE__, __LINE__);
                 return -6;
             }
-            packagelist->package = packages;
+            packagelist->package = packages2;
             packagelist->size = size;
             packagelist->tail = NULL;
+            clientlist->packagelisthead = packagelist;
+            clientlist->packagelisttail = clientlist->packagelisthead;
             clientlist->totalsize = packagelist->size;
         } else {
             free (packages);
+            clientlist->packagelisthead = NULL;
             clientlist->totalsize = 0;
         }
     } else {
         free (packages);
+        clientlist->packagelisthead = NULL;
         clientlist->totalsize = 0;
     }
-    clientlist->packagelisthead = packagelist;
     return 0;
 }
 
-int readdata (int fd) {
+int readdata (int epollfd, int fd) {
     static unsigned char readbuf[MAXDATASIZE]; // 这里使用static关键词是为了将数据存储与数据段，减小对栈空间的压力。
     unsigned int len = read (fd, readbuf, MAXDATASIZE);
     if (len <= 0) {
@@ -196,26 +211,30 @@ int readdata (int fd) {
     if (clientlist->remainsize) {
         memcpy (buff, clientlist->remainpackage, clientlist->remainsize);
         memcpy (buff+clientlist->remainsize, readbuf, len);
-        printf ("last data, offset:0, remainsize:%d, buff[0]:0x%02x, fd:%d, in %s, at %d\n", clientlist->remainsize, buff[0], fd,  __FILE__, __LINE__);
         free (clientlist->remainpackage);
         clientlist->remainsize = 0;
     } else {
         memcpy (buff, readbuf, len);
     }
-    // printf ("read fd:%d, package:0x%02x, 0x%02x, 0x%02x, 0x%02x, 0x%02x, 0x%02x, in %s, at %d\n", fd, buff[0], buff[1], buff[2], buff[3], buff[4], buff[5],  __FILE__, __LINE__);
     unsigned int offset = 0;
     while (offset < totalsize) {
         if ((buff[offset] & 0xf0) == 0x40) { // ipv4数据包
-            unsigned int packagesize = 256*buff[offset+2] + buff[offset+3]; // 数据包大小
-            if (offset + packagesize > totalsize) { // 数据包不全
-                printf ("data not completely, totalsize:%d, offset:%d, packagesize:%d, fd:%d, in %s, at %d\n", totalsize, offset, packagesize, fd,  __FILE__, __LINE__);
+            if (offset + 20 > totalsize) { // ipv4数据包头部就最小20个字节
                 unsigned int remainsize = totalsize-offset;
                 unsigned char* remainpackage = (unsigned char*) malloc (remainsize * sizeof (unsigned char));
                 memcpy (remainpackage, buff+offset, remainsize);
                 clientlist->remainsize = remainsize;
                 clientlist->remainpackage = remainpackage;
-                offset += packagesize;
-                continue;
+                break;
+            }
+            unsigned int packagesize = 256*buff[offset+2] + buff[offset+3]; // 数据包大小
+            if (offset + packagesize > totalsize) { // 数据包不全
+                unsigned int remainsize = totalsize-offset;
+                unsigned char* remainpackage = (unsigned char*) malloc (remainsize * sizeof (unsigned char));
+                memcpy (remainpackage, buff+offset, remainsize);
+                clientlist->remainsize = remainsize;
+                clientlist->remainpackage = remainpackage;
+                break;
             }
             unsigned char* package = (unsigned char*) malloc (packagesize * sizeof (unsigned char));
             if (package == NULL) {
@@ -243,20 +262,26 @@ int readdata (int fd) {
             }
             targetlist->totalsize += packagelist->size;
             if (targetlist->canwrite) { // 当前socket可写
-                writenode (targetlist);
+                writenode (epollfd, targetlist);
             }
             offset += packagesize;
         } else if ((buff[offset] & 0xf0) == 0x60) { // ipv6数据包，不知道给谁的，直接扔
-            unsigned int packagesize = 256*buff[offset+4] + buff[offset+5] + 40; // 数据包大小
-            if (offset + packagesize > totalsize) { // 数据包不全
-                printf ("data not completely, totalsize:%d, offset:%d, packagesize:%d, fd:%d, in %s, at %d\n", totalsize, offset, packagesize, fd,  __FILE__, __LINE__);
+            if (offset + 40 > totalsize) { // ipv6数据包头部就最小40个字节
                 unsigned int remainsize = totalsize-offset;
                 unsigned char* remainpackage = (unsigned char*) malloc (remainsize * sizeof (unsigned char));
                 memcpy (remainpackage, buff+offset, remainsize);
                 clientlist->remainsize = remainsize;
                 clientlist->remainpackage = remainpackage;
-                offset += packagesize;
-                continue;
+                break;
+            }
+            unsigned int packagesize = 256*buff[offset+4] + buff[offset+5] + 40; // 数据包大小
+            if (offset + packagesize > totalsize) { // 数据包不全
+                unsigned int remainsize = totalsize-offset;
+                unsigned char* remainpackage = (unsigned char*) malloc (remainsize * sizeof (unsigned char));
+                memcpy (remainpackage, buff+offset, remainsize);
+                clientlist->remainsize = remainsize;
+                clientlist->remainpackage = remainpackage;
+                break;
             }
             offset += packagesize;
             printf ("ipv6 package, size:%d, in %s, at %d\n", packagesize,  __FILE__, __LINE__);
@@ -267,10 +292,14 @@ int readdata (int fd) {
 }
 
 int main () {
-    static int tunfd, clientfd;
+    static int tunfd, clientfd, epollfd;
     tunfd = tun_alloc (); // 这里使用static是因为这个变量是不会被释放的，因此将这个数据放到数据段。
     if (tunfd < 0) {
         printf ("alloc tun fail, in %s, at %d\n",  __FILE__, __LINE__);
+        return -1;
+    }
+    if (setnonblocking (tunfd) < 0) {
+        printf ("set nonblocking fail, fd:%d, in %s, at %d\n", tunfd, __FILE__, __LINE__);
         return -1;
     }
     tun.fd = tunfd;
@@ -279,17 +308,21 @@ int main () {
         printf ("create socket fd fail, in %s, at %d\n",  __FILE__, __LINE__);
         return -2;
     }
+    if (setnonblocking (clientfd) < 0) {
+        printf ("set nonblocking fail, fd:%d, in %s, at %d\n", clientfd, __FILE__, __LINE__);
+        return -1;
+    }
     client.fd = clientfd;
     epollfd = epoll_create (MAX_EVENT);
     if (epollfd < 0) {
         printf ("create epoll fd fail, in %s, at %d\n",  __FILE__, __LINE__);
         return -3;
     }
-    if (addtoepoll (clientfd)) {
+    if (addtoepoll (epollfd, clientfd)) {
         printf ("clientfd addtoepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
         return -4;
     }
-    if (addtoepoll (tunfd)) {
+    if (addtoepoll (epollfd, tunfd)) {
         printf ("tunfd addtoepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
         return -5;
     }
@@ -308,19 +341,23 @@ int main () {
                 printf ("receive error event 0x%08x, in %s, at %d\n", evs[i].events,  __FILE__, __LINE__);
                 return -6;
             } else if (events & EPOLLIN) {
-                if (readdata (fd)) {
+                if (readdata (epollfd, fd)) {
                     close (tunfd);
                     close (clientfd);
                     close (epollfd);
                     return -7;
                 }
             } else if (events & EPOLLOUT) {
+                if (modepoll (epollfd, fd, 0)) {
+                    printf ("modepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
+                    return -2;
+                }
                 if (fd == tun.fd) {
                     tun.canwrite = 1;
-                    writenode (&tun);
+                    writenode (epollfd, &tun);
                 } else {
                     client.canwrite = 1;
-                    writenode (&client);
+                    writenode (epollfd, &client);
                 }
             } else {
                 printf ("receive new event 0x%08x, in %s, at %d\n", evs[i].events,  __FILE__, __LINE__);
