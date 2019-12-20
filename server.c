@@ -1,5 +1,5 @@
 #define tundevip          "192.168.23.1/24"
-#define serverport        3478
+#define serverport        3479
 #define password          "vCIhnEMbk9wgK4uUxCptm4bFxAAkGdTs" // 密码固定为32位
 
 #include <stdio.h>
@@ -16,8 +16,8 @@
 #include <sys/epoll.h>
 
 #define MAXDATASIZE       8*1024*1024
-#define MAX_EVENT         512
-#define MAX_ACCEPT        512
+#define MAX_EVENT         1024
+#define MAX_ACCEPT        1024
 #define MAX_CONNECT       256
 
 struct PACKAGELIST {
@@ -25,6 +25,8 @@ struct PACKAGELIST {
     unsigned int size;
     struct PACKAGELIST *tail;
 };
+struct PACKAGELIST* packagelisthead = NULL;
+struct PACKAGELIST* packagelisttail;
 struct CLIENTLIST {
     int fd;
     int canwrite;
@@ -115,11 +117,9 @@ int removeclient (int epollfd, int fd) {
         clientlist->head->tail = clientlist->tail;
         clientlist->tail->head = clientlist->head;
     }
-    struct PACKAGELIST* packagelist = clientlist->packagelisthead;
-    while (packagelist != NULL) {
-        struct PACKAGELIST* tmppackagelist = packagelist;
-        packagelist = packagelist->tail;
-        free (tmppackagelist);
+    packagelisttail->tail = clientlist->packagelisthead;
+    while (packagelisttail->tail != NULL) {
+        packagelisttail = packagelisttail->tail;
     }
     printf ("host %d.%d.%d.%d disconnect, in %s, at %d\n", clientlist->ip[0], clientlist->ip[1], clientlist->ip[2], clientlist->ip[3],  __FILE__, __LINE__);
     free (clientlist);
@@ -188,9 +188,15 @@ int writenode (int epollfd, struct CLIENTLIST* clientlist) {
     while (packagelist != NULL) {
         memcpy (packages+offset, packagelist->package, packagelist->size);
         offset += packagelist->size;
-        struct PACKAGELIST* tmppackagelist = packagelist;
+        if (packagelisthead == NULL) {
+            packagelisthead = packagelist;
+            packagelisttail = packagelisthead;
+        } else {
+            packagelisttail->tail = packagelist;
+            packagelisttail = packagelisttail->tail;
+        }
         packagelist = packagelist->tail;
-        free (tmppackagelist);
+        packagelisttail->tail = NULL;
     }
     int len = write (clientlist->fd, packages, clientlist->totalsize);
     if (len < clientlist->totalsize) { // 缓冲区不足，已无法继续写入数据。
@@ -200,14 +206,19 @@ int writenode (int epollfd, struct CLIENTLIST* clientlist) {
         }
         clientlist->canwrite = 0;
         if (len > 0) {
-            unsigned int size = clientlist->totalsize-len;
-            struct PACKAGELIST* packagelisthead = NULL;
-            struct PACKAGELIST* packagelisttail;
+            unsigned int size = clientlist->totalsize - len;
+            struct PACKAGELIST* packagelisthead2 = NULL;
+            struct PACKAGELIST* packagelisttail2;
             while (len < clientlist->totalsize) {
-                packagelist = (struct PACKAGELIST*) malloc (sizeof (struct PACKAGELIST));
-                if (packagelist == NULL) {
-                    printf ("malloc fail, in %s, at %d\n", size,  __FILE__, __LINE__);
-                    return -6;
+                if (packagelisthead != NULL) { // 全局数据包回收站不为空
+                    packagelist = packagelisthead;
+                    packagelisthead = packagelisthead->tail;
+                } else {
+                    packagelist = (struct PACKAGELIST*) malloc (sizeof (struct PACKAGELIST));
+                    if (packagelist == NULL) {
+                        printf ("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
+                        return -6;
+                    }
                 }
                 unsigned int copylen = clientlist->totalsize - len;
                 if (copylen > 1500) {
@@ -217,18 +228,18 @@ int writenode (int epollfd, struct CLIENTLIST* clientlist) {
                 len += copylen;
                 packagelist->size = copylen;
                 packagelist->tail = NULL;
-                if (packagelisthead == NULL) {
-                    packagelisthead = packagelist;
-                    packagelisttail = packagelisthead;
+                if (packagelisthead2 == NULL) {
+                    packagelisthead2 = packagelist;
+                    packagelisttail2 = packagelisthead2;
                 } else {
-                    packagelisttail->tail = packagelist;
-                    packagelisttail = packagelisttail->tail;
+                    packagelisttail2->tail = packagelist;
+                    packagelisttail2 = packagelisttail2->tail;
                 }
             }
             free (packages);
-            clientlist->packagelisthead = packagelisthead;
-            clientlist->packagelisttail = clientlist->packagelisthead;
-            clientlist->totalsize = packagelist->size;
+            clientlist->packagelisthead = packagelisthead2;
+            clientlist->packagelisttail = packagelisttail2;
+            clientlist->totalsize = size;
         } else {
             free (packages);
             clientlist->packagelisthead = NULL;
@@ -346,11 +357,17 @@ int readdata (int epollfd, int fd) {
                 printf ("target client %d.%d.%d.%d not found, in %s, at %d\n", buff[offset+16], buff[offset+17], buff[offset+18], buff[offset+19],  __FILE__, __LINE__);
                 continue;
             }
-            struct PACKAGELIST* packagelist = (struct PACKAGELIST*) malloc (sizeof (struct PACKAGELIST));
-            if (packagelist == NULL) {
-                offset += packagesize;
-                printf ("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
-                continue;
+            struct PACKAGELIST* packagelist;
+            if (packagelisthead != NULL) {
+                packagelist = packagelisthead;
+                packagelisthead = packagelisthead->tail;
+            } else {
+                packagelist = (struct PACKAGELIST*) malloc (sizeof (struct PACKAGELIST));
+                if (packagelist == NULL) {
+                    offset += packagesize;
+                    printf ("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
+                    continue;
+                }
             }
             memcpy (packagelist->package, buff + offset, packagesize);
             packagelist->size = packagesize;
@@ -363,10 +380,10 @@ int readdata (int epollfd, int fd) {
                 clientlist->packagelisttail = clientlist->packagelisttail->tail;
             }
             clientlist->totalsize += packagelist->size;
-            offset += packagesize;
             if (clientlist->canwrite) { // 当前socket可写
                 writenode (epollfd, clientlist);
             }
+            offset += packagesize;
         } else if (buff[offset] == 0x10) { // 绑定数据包
             if (offset + 5 + sizeof (password) - 1 > totalsize) { // 绑定包长度
                 saveincompletepackage (totalsize-offset, buff+offset, clientlist);
