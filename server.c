@@ -15,7 +15,7 @@
 #include <arpa/inet.h>
 #include <sys/epoll.h>
 
-#define MAXDATASIZE       3*1024*1024
+#define MAXDATASIZE       2*1024*1024
 #define MAX_EVENT         1024
 #define MAX_ACCEPT        1024
 #define MAX_CONNECT       256
@@ -127,8 +127,10 @@ int removeclient (int epollfd, int fd) {
     } else {
         packagelisttail->tail = clientlist->packagelisthead;
     }
-    while (packagelisttail->tail != NULL) {
-        packagelisttail = packagelisttail->tail;
+    if (packagelisttail != NULL) {
+        while (packagelisttail->tail != NULL) {
+            packagelisttail = packagelisttail->tail;
+        }
     }
     printf ("host %d.%d.%d.%d disconnect, in %s, at %d\n", clientlist->ip[0], clientlist->ip[1], clientlist->ip[2], clientlist->ip[3],  __FILE__, __LINE__);
     if (remainclientlisthead == NULL) {
@@ -237,7 +239,7 @@ int writenode (int epollfd, struct CLIENTLIST* clientlist) {
             return -1;
         }
         clientlist->canwrite = 0;
-        if (len > 0) {
+        if (len > 0) { // 写入了一部分数据
             unsigned int size = clientlist->totalsize - len;
             struct PACKAGELIST* packagelisthead2 = NULL;
             struct PACKAGELIST* packagelisttail2;
@@ -271,14 +273,11 @@ int writenode (int epollfd, struct CLIENTLIST* clientlist) {
             clientlist->packagelisthead = packagelisthead2;
             clientlist->packagelisttail = packagelisttail2;
             clientlist->totalsize = size;
-        } else {
-            clientlist->packagelisthead = NULL;
-            clientlist->totalsize = 0;
+            return 0；
         }
-    } else {
-        clientlist->packagelisthead = NULL;
-        clientlist->totalsize = 0;
     }
+    clientlist->packagelisthead = NULL;
+    clientlist->totalsize = 0;
     return 0;
 }
 
@@ -397,7 +396,7 @@ int readdata (int epollfd, int fd) {
                 continue;
             }
             struct PACKAGELIST* packagelist;
-            if (packagelisthead != NULL) {
+            if (packagelisthead != NULL) { // 全局数据包回收站不为空
                 packagelist = packagelisthead;
                 packagelisthead = packagelisthead->tail;
             } else {
@@ -514,6 +513,43 @@ int main () {
                     printf ("set nonblocking fail, fd:%d, in %s, at %d\n", newfd, __FILE__, __LINE__);
                     continue;
                 }
+/* 这是设置收发缓冲区大小的代码段。
+                socklen_t len = sizeof(int);
+                unsigned int bufsize;
+                if (getsockopt(newfd, SOL_SOCKET, SO_RCVBUF, (unsigned char*)&bufsize, &len)) {
+                    printf ("get receive buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
+                    continue;
+                }
+                printf ("receive buffer is %d, len:%d, in %s, at %d\n", bufsize, len,  __FILE__, __LINE__);
+                len = sizeof(unsigned int);
+                if (getsockopt(newfd, SOL_SOCKET, SO_SNDBUF, (unsigned char*)&bufsize, &len)) {
+                    printf ("get send buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
+                    continue;
+                }
+                printf ("send buffer is %d, len:%d, in %s, at %d\n", bufsize, len,  __FILE__, __LINE__);
+                bufsize = MAXDATASIZE - 1500;
+                if (setsockopt(newfd, SOL_SOCKET, SO_RCVBUF, (char*)&bufsize, sizeof (int))) {
+                    printf ("set receive buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
+                    continue;
+                }
+                bufsize = MAXDATASIZE - 1500;
+                if (setsockopt(newfd, SOL_SOCKET, SO_SNDBUF, (unsigned char*)&bufsize, sizeof (int))) {
+                    printf ("set send buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
+                    continue;
+                }
+                len = sizeof(unsigned int);
+                if (getsockopt(newfd, SOL_SOCKET, SO_RCVBUF, (unsigned char*)&bufsize, &len)) {
+                    printf ("get receive buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
+                    continue;
+                }
+                printf ("receive buffer is %d, len:%d, in %s, at %d\n", bufsize, len,  __FILE__, __LINE__);
+                len = sizeof(unsigned int);
+                if (getsockopt(newfd, SOL_SOCKET, SO_SNDBUF, (unsigned char*)&bufsize, &len)) {
+                    printf ("get send buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
+                    continue;
+                }
+                printf ("send buffer is %d, len:%d, in %s, at %d\n", bufsize, len,  __FILE__, __LINE__);
+*/
                 if (addtoepoll (epollfd, newfd)) {
                     close (newfd);
                     printf ("add to epoll fail, in %s, at %d\n",  __FILE__, __LINE__);

@@ -64,14 +64,14 @@ int connect_socketfd (unsigned char* ip, unsigned int port) {
     in_addr_t _ip = inet_addr(ip); // 服务器ip地址，这里不能输入域名
     if (_ip == INADDR_NONE) {
         printf ("server ip error, in %s, at %d\n", __FILE__, __LINE__);
-		return -2;
+        return -2;
     }
     sin.sin_addr.s_addr = _ip;
     sin.sin_port = htons (port);
     if(connect (fd, (struct sockaddr*)&sin, sizeof(sin)) < 0) {
         printf ("connect server fail, in %s, at %d\n", __FILE__, __LINE__);
-		return -5;
-	}
+        return -5;
+    }
     return fd;
 }
 
@@ -168,7 +168,7 @@ int writenode (int epollfd, struct CLIENTLIST* clientlist) {
             return -2;
         }
         clientlist->canwrite = 0;
-        if (len > 0) {
+        if (len > 0) { // 写入了一部分数据
             unsigned int size = clientlist->totalsize - len;
             struct PACKAGELIST* packagelisthead2 = NULL;
             struct PACKAGELIST* packagelisttail2;
@@ -202,14 +202,11 @@ int writenode (int epollfd, struct CLIENTLIST* clientlist) {
             clientlist->packagelisthead = packagelisthead2;
             clientlist->packagelisttail = packagelisttail2;
             clientlist->totalsize = size;
-        } else {
-            clientlist->packagelisthead = NULL;
-            clientlist->totalsize = 0;
+            return 0;
         }
-    } else {
-        clientlist->packagelisthead = NULL;
-        clientlist->totalsize = 0;
     }
+    clientlist->packagelisthead = NULL;
+    clientlist->totalsize = 0;
     return 0;
 }
 
@@ -217,7 +214,7 @@ int readdata (int epollfd, int fd) {
     static unsigned char readbuf[MAXDATASIZE]; // 这里使用static关键词是为了将数据存储与数据段，减小对栈空间的压力。
     static unsigned char* readbuff = NULL;
     static unsigned int maxtotalsize = 0;
-    unsigned int len = read (fd, readbuf, MAXDATASIZE);
+    int len = read (fd, readbuf, MAXDATASIZE);
     if (len <= 0) {
         printf ("read fail, len: %d, in %s, at %d\n", len,  __FILE__, __LINE__);
         return -1;
@@ -266,7 +263,7 @@ int readdata (int epollfd, int fd) {
                 break;
             }
             struct PACKAGELIST* packagelist;
-            if (packagelisthead != NULL) {
+            if (packagelisthead != NULL) { // 全局数据包回收站不为空
                 packagelist = packagelisthead;
                 packagelisthead = packagelisthead->tail;
             } else {
@@ -325,7 +322,7 @@ int main () {
     }
     if (setnonblocking (tunfd) < 0) {
         printf ("set nonblocking fail, fd:%d, in %s, at %d\n", tunfd, __FILE__, __LINE__);
-        return -1;
+        return -2;
     }
     tun.fd = tunfd;
     tun.canwrite = 1;
@@ -335,12 +332,49 @@ int main () {
     clientfd = connect_socketfd (serverip, serverport);
     if (clientfd < 0) {
         printf ("create socket fd fail, in %s, at %d\n",  __FILE__, __LINE__);
-        return -2;
+        return -3;
     }
     if (setnonblocking (clientfd) < 0) {
         printf ("set nonblocking fail, fd:%d, in %s, at %d\n", clientfd, __FILE__, __LINE__);
+        return -4;
+    }
+/* 这是设置收发缓冲区大小的代码段。
+    socklen_t len = sizeof(int);
+    int bufsize;
+    if (getsockopt(clientfd, SOL_SOCKET, SO_RCVBUF, (unsigned char*)&bufsize, &len)) {
+        printf ("get receive buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
         return -1;
     }
+    printf ("receive buffer is %d, len:%d, in %s, at %d\n", bufsize, len,  __FILE__, __LINE__);
+    len = sizeof(int);
+    if (getsockopt(clientfd, SOL_SOCKET, SO_SNDBUF, (unsigned char*)&bufsize, &len)) {
+        printf ("get send buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
+        return -1;
+    }
+    printf ("send buffer is %d, len:%d, in %s, at %d\n", bufsize, len,  __FILE__, __LINE__);
+    bufsize = MAXDATASIZE - 1500;
+    if (setsockopt(clientfd, SOL_SOCKET, SO_RCVBUF, (unsigned char*)&bufsize, sizeof (int))) {
+        printf ("set receive buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
+        return -1;
+    }
+    bufsize = MAXDATASIZE - 1500;
+    if (setsockopt(clientfd, SOL_SOCKET, SO_SNDBUF, (unsigned char*)&bufsize, sizeof (int))) {
+        printf ("set send buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
+        return -1;
+    }
+    len = sizeof(int);
+    if (getsockopt(clientfd, SOL_SOCKET, SO_RCVBUF, (unsigned char*)&bufsize, &len)) {
+        printf ("get receive buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
+        return -1;
+    }
+    printf ("receive buffer is %d, len:%d, in %s, at %d\n", bufsize, len,  __FILE__, __LINE__);
+    len = sizeof(int);
+    if (getsockopt(clientfd, SOL_SOCKET, SO_SNDBUF, (unsigned char*)&bufsize, &len)) {
+        printf ("get send buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
+        return -1;
+    }
+    printf ("send buffer is %d, len:%d, in %s, at %d\n", bufsize, len,  __FILE__, __LINE__);
+*/
     client.fd = clientfd;
     client.canwrite = 1;
     client.packagelisthead = NULL;
@@ -349,15 +383,15 @@ int main () {
     epollfd = epoll_create (MAX_EVENT);
     if (epollfd < 0) {
         printf ("create epoll fd fail, in %s, at %d\n",  __FILE__, __LINE__);
-        return -3;
+        return -5;
     }
     if (addtoepoll (epollfd, clientfd)) {
         printf ("clientfd addtoepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
-        return -4;
+        return -6;
     }
     if (addtoepoll (epollfd, tunfd)) {
         printf ("tunfd addtoepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
-        return -5;
+        return -7;
     }
     loginserver ();
     while (1) {
@@ -372,18 +406,18 @@ int main () {
                 close (clientfd);
                 close (epollfd);
                 printf ("receive error event 0x%08x, in %s, at %d\n", evs[i].events,  __FILE__, __LINE__);
-                return -6;
+                return -8;
             } else if (events & EPOLLIN) {
                 if (readdata (epollfd, fd)) {
                     close (tunfd);
                     close (clientfd);
                     close (epollfd);
-                    return -7;
+                    return -9;
                 }
             } else if (events & EPOLLOUT) {
                 if (modepoll (epollfd, fd, 0)) {
                     printf ("modepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
-                    return -2;
+                    return -10;
                 }
                 if (fd == tun.fd) {
                     tun.canwrite = 1;
