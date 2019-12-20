@@ -36,6 +36,9 @@ struct CLIENTLIST {
     unsigned int totalsize;
     unsigned char remainpackage[MTU_SIZE];
     unsigned int remainsize;
+    unsigned char* buffer;
+    unsigned int bufsize;
+    unsigned int usefulsize;
 };
 struct CLIENTLIST tun;
 struct CLIENTLIST client;
@@ -140,15 +143,24 @@ int tun_alloc () {
 int writenode (int epollfd, struct CLIENTLIST* clientlist) {
     static unsigned char* packages = NULL;
     static unsigned int maxtotalsize = 0;
-    if (maxtotalsize < clientlist->totalsize) {
-        maxtotalsize = clientlist->totalsize;
+    unsigned int totalsize = clientlist->usefulsize + clientlist->totalsize;
+    if (maxtotalsize < totalsize) {
+        maxtotalsize = totalsize;
         if (packages != NULL) {
             free (packages);
         }
         packages = (unsigned char*) malloc (maxtotalsize * sizeof (unsigned char));
+        if (packages == NULL) {
+            printf ("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
+            return -1;
+        }
+    }
+    unsigned int offset = clientlist->usefulsize;
+    if (clientlist->usefulsize > 0) { // buffer不为空
+        memcpy (packages, clientlist->buffer, clientlist->usefulsize);
+        clientlist->usefulsize = 0;
     }
     struct PACKAGELIST* packagelist = clientlist->packagelisthead;
-    unsigned int offset = 0;
     while (packagelist != NULL) {
         memcpy (packages+offset, packagelist->package, packagelist->size);
         offset += packagelist->size;
@@ -162,52 +174,32 @@ int writenode (int epollfd, struct CLIENTLIST* clientlist) {
         packagelist = packagelist->tail;
         packagelisttail->tail = NULL;
     }
-    int len = write (clientlist->fd, packages, clientlist->totalsize);
-    if (len < clientlist->totalsize) { // 缓冲区不足，已无法继续写入数据。
+    clientlist->packagelisthead = NULL;
+    clientlist->totalsize = 0;
+    int len = write (clientlist->fd, packages, totalsize);
+    if (len < totalsize) { // 缓冲区不足，已无法继续写入数据。
         if (modepoll (epollfd, clientlist->fd, EPOLLOUT)) {
             printf ("modepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
             return -2;
         }
         clientlist->canwrite = 0;
         if (len > 0) { // 写入了一部分数据
-            unsigned int size = clientlist->totalsize - len;
-            struct PACKAGELIST* packagelisthead2 = NULL;
-            struct PACKAGELIST* packagelisttail2;
-            while (len < clientlist->totalsize) {
-                if (packagelisthead != NULL) { // 全局数据包回收站不为空
-                    packagelist = packagelisthead;
-                    packagelisthead = packagelisthead->tail;
-                } else {
-                    packagelist = (struct PACKAGELIST*) malloc (sizeof (struct PACKAGELIST));
-                    if (packagelist == NULL) {
-                        printf ("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
-                        return -6;
-                    }
+            unsigned int size = totalsize - len;
+            if (clientlist->bufsize < size) {
+                clientlist->bufsize = size;
+                if (clientlist->buffer != NULL) {
+                    free (clientlist->buffer);
                 }
-                unsigned int copylen = clientlist->totalsize - len;
-                if (copylen > MTU_SIZE) {
-                    copylen = MTU_SIZE;
-                }
-                memcpy (packagelist->package, packages+len, copylen);
-                len += copylen;
-                packagelist->size = copylen;
-                packagelist->tail = NULL;
-                if (packagelisthead2 == NULL) {
-                    packagelisthead2 = packagelist;
-                    packagelisttail2 = packagelisthead2;
-                } else {
-                    packagelisttail2->tail = packagelist;
-                    packagelisttail2 = packagelisttail2->tail;
+                clientlist->buffer = (unsigned char*) malloc (clientlist->bufsize * sizeof (unsigned char));
+                if (clientlist->buffer == NULL) {
+                    printf ("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
+                    return -3;
                 }
             }
-            clientlist->packagelisthead = packagelisthead2;
-            clientlist->packagelisttail = packagelisttail2;
-            clientlist->totalsize = size;
-            return 0;
+            memcpy (clientlist->buffer, packages+len, size);
+            clientlist->usefulsize = size;
         }
     }
-    clientlist->packagelisthead = NULL;
-    clientlist->totalsize = 0;
     return 0;
 }
 
@@ -238,6 +230,9 @@ int readdata (int epollfd, int fd) {
                 free (readbuff);
             }
             readbuff = (unsigned char*) malloc (totalsize * sizeof (unsigned char));
+            if (readbuff == NULL) {
+                return -2;
+            }
         }
         buff = readbuff;
         memcpy (readbuff, clientlist->remainpackage, clientlist->remainsize);
@@ -328,8 +323,11 @@ int main () {
     tun.fd = tunfd;
     tun.canwrite = 1;
     tun.packagelisthead = NULL;
-    tun.remainsize = 0;
     tun.totalsize = 0;
+    tun.remainsize = 0;
+    tun.buffer = NULL;
+    tun.bufsize = 0;
+    tun.usefulsize = 0;
     clientfd = connect_socketfd (serverip, serverport);
     if (clientfd < 0) {
         printf ("create socket fd fail, in %s, at %d\n",  __FILE__, __LINE__);
@@ -379,8 +377,11 @@ int main () {
     client.fd = clientfd;
     client.canwrite = 1;
     client.packagelisthead = NULL;
-    client.remainsize = 0;
     client.totalsize = 0;
+    client.remainsize = 0;
+    client.buffer = NULL;
+    client.bufsize = 0;
+    client.usefulsize = 0;
     epollfd = epoll_create (MAX_EVENT);
     if (epollfd < 0) {
         printf ("create epoll fd fail, in %s, at %d\n",  __FILE__, __LINE__);
