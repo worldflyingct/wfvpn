@@ -273,7 +273,7 @@ int writenode (int epollfd, struct CLIENTLIST* clientlist) {
             clientlist->packagelisthead = packagelisthead2;
             clientlist->packagelisttail = packagelisttail2;
             clientlist->totalsize = size;
-            return 0；
+            return 0;
         }
     }
     clientlist->packagelisthead = NULL;
