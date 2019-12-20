@@ -1,5 +1,5 @@
 #define serverip          "192.168.56.101" // 服务器的地址，不支持域名
-#define serverport        3479
+#define serverport        3478
 #define clientip          "192.168.23.20/24"
 #define password          "vCIhnEMbk9wgK4uUxCptm4bFxAAkGdTs" // 密码固定为32位
 

@@ -1,5 +1,5 @@
 #define tundevip          "192.168.23.1/24"
-#define serverport        3479
+#define serverport        3478
 #define password          "vCIhnEMbk9wgK4uUxCptm4bFxAAkGdTs" // 密码固定为32位
 
 #include <stdio.h>
@@ -15,7 +15,7 @@
 #include <arpa/inet.h>
 #include <sys/epoll.h>
 
-#define MAXDATASIZE       2*1024*1024
+#define MAXDATASIZE       3*1024*1024
 #define MAX_EVENT         1024
 #define MAX_ACCEPT        1024
 #define MAX_CONNECT       256
@@ -41,6 +41,8 @@ struct CLIENTLIST {
 };
 struct CLIENTLIST* clientlisthead = NULL;
 struct CLIENTLIST* clientlisttail;
+struct CLIENTLIST* remainclientlisthead = NULL;
+struct CLIENTLIST* remainclientlisttail;
 
 int setnonblocking (int fd) {
     int flags = fcntl (fd, F_GETFL, 0);
@@ -50,7 +52,7 @@ int setnonblocking (int fd) {
     }
     if(fcntl (fd, F_SETFL, flags | O_NONBLOCK) < 0) {
         printf ("set flags fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
-        return -1;
+        return -2;
     }
     return 0;
 }
@@ -72,7 +74,7 @@ int create_socketfd (unsigned int port) {
     }
     if (listen (fd, MAX_CONNECT) < 0) {
         printf ("listen port %d fail, in %s, at %d\n", serverport, __FILE__, __LINE__);
-        return -5;
+        return -3;
     }
     return fd;
 }
@@ -109,7 +111,9 @@ int removeclient (int epollfd, int fd) {
     }
     if (clientlist->head == NULL) {
         clientlisthead = clientlist->tail;
-        clientlisthead->head = NULL;
+        if (clientlisthead != NULL) {
+            clientlisthead->head = NULL;
+        }
     } else if (clientlist->tail == NULL) {
         clientlisttail = clientlist->head;
         clientlisttail->tail = NULL;
@@ -117,12 +121,24 @@ int removeclient (int epollfd, int fd) {
         clientlist->head->tail = clientlist->tail;
         clientlist->tail->head = clientlist->head;
     }
-    packagelisttail->tail = clientlist->packagelisthead;
+    if (packagelisthead == NULL) {
+        packagelisthead = clientlist->packagelisthead;
+        packagelisttail = packagelisthead;
+    } else {
+        packagelisttail->tail = clientlist->packagelisthead;
+    }
     while (packagelisttail->tail != NULL) {
         packagelisttail = packagelisttail->tail;
     }
     printf ("host %d.%d.%d.%d disconnect, in %s, at %d\n", clientlist->ip[0], clientlist->ip[1], clientlist->ip[2], clientlist->ip[3],  __FILE__, __LINE__);
-    free (clientlist);
+    if (remainclientlisthead == NULL) {
+        remainclientlisthead = clientlist;
+        remainclientlisttail = remainclientlisthead;
+    } else {
+        remainclientlisttail->tail = clientlist;
+        remainclientlisttail = remainclientlisttail->tail;
+    }
+    remainclientlisttail->tail = NULL;
     return 0;
 }
 
@@ -147,33 +163,45 @@ int tun_alloc () {
     sprintf (cmd, "ip link set %s up", ifr.ifr_name);
     system (cmd);
     printf ("tun ip is "tundevip", in %s, at %d\n", __FILE__, __LINE__);
-    clientlisthead = (struct CLIENTLIST*) malloc (sizeof (struct CLIENTLIST));
-    if (clientlisthead == NULL) {
-        printf ("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
-        return -3;
+    struct CLIENTLIST* clientlist;
+    if (remainclientlisthead != NULL) {
+        clientlist = remainclientlisthead;
+        remainclientlisthead = remainclientlisthead->tail;
+    } else {
+        clientlist = (struct CLIENTLIST*) malloc (sizeof (struct CLIENTLIST));
+        if (clientlist == NULL) {
+            printf ("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
+            return -3;
+        }
     }
-    clientlisthead->fd = fd;
-    clientlisthead->canwrite = 1;
-    clientlisthead->packagelisthead = NULL;
-    clientlisthead->totalsize = 0;
-    clientlisthead->remainsize = 0;
+    clientlist->fd = fd;
+    clientlist->canwrite = 1;
+    clientlist->packagelisthead = NULL;
+    clientlist->totalsize = 0;
+    clientlist->remainsize = 0;
     int addr = 0;
     unsigned char ipaddr = 0;
     for (int i = 0 ; i < sizeof (tundevip)-1 ; i++) {
         if (tundevip[i] == '.') {
-            clientlisthead->ip[addr] = ipaddr;
+            clientlist->ip[addr] = ipaddr;
             ipaddr = 0;
             addr++;
         } else if (tundevip[i] == '/') {
-            clientlisthead->ip[addr] = ipaddr;
+            clientlist->ip[addr] = ipaddr;
             break;
         } else {
             ipaddr = 10 * ipaddr + (tundevip[i]-'0');
         }
     }
-    clientlisthead->head = NULL;
-    clientlisthead->tail = NULL;
-    clientlisttail = clientlisthead;
+    clientlist->head = NULL;
+    clientlist->tail = NULL;
+    if (clientlisthead == NULL) {
+        clientlisthead = clientlist;
+        clientlisttail = clientlisthead;
+    } else {
+        clientlisttail->tail = clientlist;
+        clientlisttail = clientlisttail->tail;
+    }
     return fd;
 }
 
@@ -206,7 +234,7 @@ int writenode (int epollfd, struct CLIENTLIST* clientlist) {
     if (len < clientlist->totalsize) { // 缓冲区不足，已无法继续写入数据。
         if (modepoll (epollfd, clientlist->fd, EPOLLOUT)) {
             printf ("modepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
-            return -2;
+            return -1;
         }
         clientlist->canwrite = 0;
         if (len > 0) {
@@ -221,7 +249,7 @@ int writenode (int epollfd, struct CLIENTLIST* clientlist) {
                     packagelist = (struct PACKAGELIST*) malloc (sizeof (struct PACKAGELIST));
                     if (packagelist == NULL) {
                         printf ("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
-                        return -6;
+                        return -2;
                     }
                 }
                 unsigned int copylen = clientlist->totalsize - len;
@@ -290,10 +318,15 @@ int readdata (int epollfd, int fd) {
             printf ("ip %d.%d.%d.%d is exist, in %s, at %d\n", readbuf[1], readbuf[2], readbuf[3], readbuf[4],  __FILE__, __LINE__);
             return -4;
         }
-        clientlist = (struct CLIENTLIST*) malloc (sizeof (struct CLIENTLIST));
-        if (clientlist == NULL) {
-            printf ("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
-            return -5;
+        if (remainclientlisthead != NULL) {
+            clientlist = remainclientlisthead;
+            remainclientlisthead = remainclientlisthead->tail;
+        } else {
+            clientlist = (struct CLIENTLIST*) malloc (sizeof (struct CLIENTLIST));
+            if (clientlist == NULL) {
+                printf ("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
+                return -5;
+            }
         }
         clientlist->fd = fd;
         memcpy (clientlist->ip, readbuf+1, 4);
@@ -432,29 +465,29 @@ int main () {
     }
     if (setnonblocking (tunfd) < 0) {
         printf ("set nonblocking fail, fd:%d, in %s, at %d\n", tunfd, __FILE__, __LINE__);
-        return -1;
+        return -2;
     }
     serverfd = create_socketfd (serverport);
     if (serverfd < 0) {
         printf ("create socket fd fail, in %s, at %d\n",  __FILE__, __LINE__);
-        return -2;
+        return -3;
     }
     if (setnonblocking (serverfd) < 0) {
         printf ("set nonblocking fail, fd:%d, in %s, at %d\n", serverfd, __FILE__, __LINE__);
-        return -1;
+        return -4;
     }
     epollfd = epoll_create (MAX_EVENT);
     if (epollfd < 0) {
         printf ("create epoll fd fail, in %s, at %d\n",  __FILE__, __LINE__);
-        return -3;
+        return -5;
     }
     if (addtoepoll (epollfd, serverfd)) {
         printf ("serverfd addtoepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
-        return -4;
+        return -6;
     }
     if (addtoepoll (epollfd, tunfd)) {
         printf ("tunfd addtoepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
-        return -5;
+        return -7;
     }
     printf ("init finish, server port is %d password is "password", in %s, at %d\n", serverport,  __FILE__, __LINE__);
     while (1) {
@@ -494,7 +527,7 @@ int main () {
             } else if (events & EPOLLOUT) { // 数据可写
                 if (modepoll (epollfd, fd, 0)) {
                     printf ("modepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
-                    return -2;
+                    return -8;
                 }
                 struct CLIENTLIST* clientlist;
                 for (clientlist = clientlisthead ; clientlist != NULL ; clientlist = clientlist->tail) {
