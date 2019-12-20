@@ -301,15 +301,18 @@ int readdata (int epollfd, int fd) {
         offset += 5 + sizeof (password) - 1; // 绑定包长度
         printf ("add client success, client ip is %d.%d.%d.%d, in %s, at %d\n", readbuf[1], readbuf[2], readbuf[3], readbuf[4],  __FILE__, __LINE__);
     }
-    unsigned int totalsize = clientlist->remainsize + len;
-    unsigned char* buff = (unsigned char*) malloc (totalsize * sizeof (unsigned char));
+    unsigned int totalsize;
+    unsigned char* buff;
     if (clientlist->remainsize) {
+        totalsize = clientlist->remainsize + len;
+        buff = (unsigned char*) malloc (totalsize * sizeof (unsigned char));
         memcpy (buff, clientlist->remainpackage, clientlist->remainsize);
         memcpy (buff+clientlist->remainsize, readbuf, len);
         free (clientlist->remainpackage);
         clientlist->remainsize = 0;
     } else {
-        memcpy (buff, readbuf, len);
+        totalsize = len;
+        buff = readbuf;
     }
     while (offset < totalsize) {
         if ((buff[offset] & 0xf0) == 0x40) { // ipv4数据包
@@ -392,7 +395,9 @@ int readdata (int epollfd, int fd) {
             exit (0);
         }
     }
-    free (buff);
+    if (buff != readbuf) {
+        free (buff);
+    }
     return 0;
 }
 
