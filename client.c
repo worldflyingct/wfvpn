@@ -19,9 +19,10 @@
 #define MAXDATASIZE       2*1024*1024
 #define MAX_EVENT         1024
 #define MAX_ACCEPT        1024
+#define MTU_SIZE          1500
 
 struct PACKAGELIST {
-    unsigned char package[1500];
+    unsigned char package[MTU_SIZE];
     unsigned int size;
     struct PACKAGELIST *tail;
 };
@@ -33,7 +34,7 @@ struct CLIENTLIST {
     struct PACKAGELIST* packagelisthead;
     struct PACKAGELIST* packagelisttail;
     unsigned int totalsize;
-    unsigned char remainpackage[1500];
+    unsigned char remainpackage[MTU_SIZE];
     unsigned int remainsize;
 };
 struct CLIENTLIST tun;
@@ -184,8 +185,8 @@ int writenode (int epollfd, struct CLIENTLIST* clientlist) {
                     }
                 }
                 unsigned int copylen = clientlist->totalsize - len;
-                if (copylen > 1500) {
-                    copylen = 1500;
+                if (copylen > MTU_SIZE) {
+                    copylen = MTU_SIZE;
                 }
                 memcpy (packagelist->package, packages+len, copylen);
                 len += copylen;
@@ -352,12 +353,12 @@ int main () {
         return -1;
     }
     printf ("send buffer is %d, len:%d, in %s, at %d\n", bufsize, len,  __FILE__, __LINE__);
-    bufsize = MAXDATASIZE - 1500;
+    bufsize = MAXDATASIZE - MTU_SIZE;
     if (setsockopt(clientfd, SOL_SOCKET, SO_RCVBUF, (unsigned char*)&bufsize, sizeof (int))) {
         printf ("set receive buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
         return -1;
     }
-    bufsize = MAXDATASIZE - 1500;
+    bufsize = MAXDATASIZE - MTU_SIZE;
     if (setsockopt(clientfd, SOL_SOCKET, SO_SNDBUF, (unsigned char*)&bufsize, sizeof (int))) {
         printf ("set send buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
         return -1;
