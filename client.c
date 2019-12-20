@@ -21,7 +21,7 @@
 #define MAX_ACCEPT        512
 
 struct PACKAGELIST {
-    unsigned char* package;
+    unsigned char package[1500];
     unsigned int size;
     struct PACKAGELIST *tail;
 };
@@ -74,24 +74,24 @@ int connect_socketfd (unsigned char* ip, unsigned int port) {
 }
 
 int loginserver () {
-    unsigned char data[37];
+    unsigned char data[5+sizeof(password)-1];
     data[0] = 0x10;
-    memcpy (&data[1], password, 32);
     int addr = 0;
     unsigned char ipaddr = 0;
     for (int i = 0 ; i < sizeof (clientip)-1 ; i++) {
         if (clientip[i] == '.') {
-            data[33+addr] = ipaddr;
+            data[1+addr] = ipaddr;
             ipaddr = 0;
             addr++;
         } else if (clientip[i] == '/') {
-            data[33+addr] = ipaddr;
+            data[1+addr] = ipaddr;
             break;
         } else {
             ipaddr = 10 * ipaddr + (clientip[i]-'0');
         }
     }
-    printf ("virtual ip:%d.%d.%d.%d, in %s, at %d\n", data[33], data[34], data[35], data[36], __FILE__, __LINE__);
+    printf ("virtual ip:%d.%d.%d.%d, in %s, at %d\n", data[1], data[2], data[3], data[4], __FILE__, __LINE__);
+    memcpy (data + 5, password, sizeof(password)-1);
     write (client.fd, data, sizeof (data));
 }
 
@@ -147,7 +147,6 @@ int writenode (int epollfd, struct CLIENTLIST* clientlist) {
         offset += packagelist->size;
         struct PACKAGELIST* tmppackagelist = packagelist;
         packagelist = packagelist->tail;
-        free (tmppackagelist->package);
         free (tmppackagelist);
     }
     int len = write (clientlist->fd, packages, clientlist->totalsize);
@@ -159,22 +158,32 @@ int writenode (int epollfd, struct CLIENTLIST* clientlist) {
         clientlist->canwrite = 0;
         if (len > 0) {
             unsigned int size = clientlist->totalsize-len;
-            unsigned char* packages2 = (unsigned char*) malloc (size * sizeof (unsigned char));
-            if (packages2 == NULL) {
-                printf ("malloc fail, size:%d, in %s, at %d\n", size,  __FILE__, __LINE__);
-                return -6;
+            struct PACKAGELIST* packagelisthead = NULL;
+            struct PACKAGELIST* packagelisttail;
+            while (len < clientlist->totalsize) {
+                packagelist = (struct PACKAGELIST*) malloc (sizeof (struct PACKAGELIST));
+                if (packagelist == NULL) {
+                    printf ("malloc fail, in %s, at %d\n", size,  __FILE__, __LINE__);
+                    return -6;
+                }
+                unsigned int copylen = clientlist->totalsize - len;
+                if (copylen > 1500) {
+                    copylen = 1500;
+                }
+                memcpy (packagelist->package, packages+len, copylen);
+                len += copylen;
+                packagelist->size = copylen;
+                packagelist->tail = NULL;
+                if (packagelisthead == NULL) {
+                    packagelisthead = packagelist;
+                    packagelisttail = packagelisthead;
+                } else {
+                    packagelisttail->tail = packagelist;
+                    packagelisttail = packagelisttail->tail;
+                }
             }
-            memcpy (packages2, packages+len, size);
             free (packages);
-            packagelist = (struct PACKAGELIST*) malloc (sizeof (struct PACKAGELIST));
-            if (packagelist == NULL) {
-                printf ("malloc fail, in %s, at %d\n", size,  __FILE__, __LINE__);
-                return -6;
-            }
-            packagelist->package = packages2;
-            packagelist->size = size;
-            packagelist->tail = NULL;
-            clientlist->packagelisthead = packagelist;
+            clientlist->packagelisthead = packagelisthead;
             clientlist->packagelisttail = clientlist->packagelisthead;
             clientlist->totalsize = packagelist->size;
         } else {
@@ -234,21 +243,13 @@ int readdata (int epollfd, int fd) {
                 saveincompletepackage (totalsize-offset, buff+offset, clientlist);
                 break;
             }
-            unsigned char* package = (unsigned char*) malloc (packagesize * sizeof (unsigned char));
-            if (package == NULL) {
-                offset += packagesize;
-                printf ("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
-                continue;
-            }
-            memcpy (package, buff + offset, packagesize);
             struct PACKAGELIST* packagelist = (struct PACKAGELIST*) malloc (sizeof (struct PACKAGELIST));
             if (packagelist == NULL) {
-                free (package);
                 offset += packagesize;
                 printf ("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
                 continue;
             }
-            packagelist->package = package;
+            memcpy (packagelist->package, buff + offset, packagesize);
             packagelist->size = packagesize;
             packagelist->tail = NULL;
             if (targetlist->packagelisthead == NULL) {
