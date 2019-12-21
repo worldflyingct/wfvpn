@@ -17,6 +17,8 @@
 #include <sys/epoll.h>
 
 #define MAXDATASIZE       2*1024*1024
+#define RESETSNDBUF       // 重设socket的写缓冲大小
+#define RESETRCVBUF       // 重设socket的读缓冲大小
 #define MAX_EVENT         1024
 #define MAX_ACCEPT        1024
 #define MTU_SIZE          1500
@@ -337,43 +339,48 @@ int main () {
         printf ("set nonblocking fail, fd:%d, in %s, at %d\n", clientfd, __FILE__, __LINE__);
         return -4;
     }
-/* 这是设置收发缓冲区大小的代码段。
-    socklen_t len = sizeof(int);
-    int bufsize;
-    if (getsockopt(clientfd, SOL_SOCKET, SO_RCVBUF, (unsigned char*)&bufsize, &len)) {
-        printf ("get receive buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
-        return -1;
-    }
-    printf ("receive buffer is %d, len:%d, in %s, at %d\n", bufsize, len,  __FILE__, __LINE__);
-    len = sizeof(int);
+#if ((defined RESETSNDBUF) || (defined RESETRCVBUF))
+    socklen_t len;
+    unsigned int bufsize;
+#endif
+#ifdef RESETSNDBUF
+    len = sizeof(bufsize);
     if (getsockopt(clientfd, SOL_SOCKET, SO_SNDBUF, (unsigned char*)&bufsize, &len)) {
         printf ("get send buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
         return -1;
     }
-    printf ("send buffer is %d, len:%d, in %s, at %d\n", bufsize, len,  __FILE__, __LINE__);
+    printf ("old send buffer is %d, len:%d, in %s, at %d\n", bufsize, len,  __FILE__, __LINE__);
     bufsize = MAXDATASIZE - MTU_SIZE;
-    if (setsockopt(clientfd, SOL_SOCKET, SO_RCVBUF, (unsigned char*)&bufsize, sizeof (int))) {
-        printf ("set receive buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
-        return -1;
-    }
-    bufsize = MAXDATASIZE - MTU_SIZE;
-    if (setsockopt(clientfd, SOL_SOCKET, SO_SNDBUF, (unsigned char*)&bufsize, sizeof (int))) {
+    if (setsockopt(clientfd, SOL_SOCKET, SO_SNDBUF, (unsigned char*)&bufsize, sizeof (bufsize))) {
         printf ("set send buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
         return -1;
     }
-    len = sizeof(int);
-    if (getsockopt(clientfd, SOL_SOCKET, SO_RCVBUF, (unsigned char*)&bufsize, &len)) {
-        printf ("get receive buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
-        return -1;
-    }
-    printf ("receive buffer is %d, len:%d, in %s, at %d\n", bufsize, len,  __FILE__, __LINE__);
-    len = sizeof(int);
+    len = sizeof(bufsize);
     if (getsockopt(clientfd, SOL_SOCKET, SO_SNDBUF, (unsigned char*)&bufsize, &len)) {
         printf ("get send buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
         return -1;
     }
-    printf ("send buffer is %d, len:%d, in %s, at %d\n", bufsize, len,  __FILE__, __LINE__);
-*/
+    printf ("new send buffer is %d, len:%d, in %s, at %d\n", bufsize, len,  __FILE__, __LINE__);
+#endif
+#ifdef RESETSNDBUF
+    len = sizeof(bufsize);
+    if (getsockopt(clientfd, SOL_SOCKET, SO_RCVBUF, (unsigned char*)&bufsize, &len)) {
+        printf ("get receive buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
+        return -1;
+    }
+    printf ("old receive buffer is %d, len:%d, in %s, at %d\n", bufsize, len,  __FILE__, __LINE__);
+    bufsize = MAXDATASIZE - MTU_SIZE;
+    if (setsockopt(clientfd, SOL_SOCKET, SO_RCVBUF, (unsigned char*)&bufsize, sizeof (bufsize))) {
+        printf ("set receive buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
+        return -1;
+    }
+    len = sizeof(bufsize);
+    if (getsockopt(clientfd, SOL_SOCKET, SO_RCVBUF, (unsigned char*)&bufsize, &len)) {
+        printf ("get receive buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
+        return -1;
+    }
+    printf ("new receive buffer is %d, len:%d, in %s, at %d\n", bufsize, len,  __FILE__, __LINE__);
+#endif
     client.fd = clientfd;
     client.canwrite = 1;
     client.packagelisthead = NULL;
