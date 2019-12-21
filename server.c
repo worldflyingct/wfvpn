@@ -538,17 +538,17 @@ int main () {
                     continue;
                 }
                 socksval = KEEPIDLE;
-                if (setsockopt (serverfd, SOL_TCP, TCP_KEEPIDLE, (unsigned char*)&socksval, sizeof(socksval))) { // 设置tcp心跳包参数
+                if (setsockopt (serverfd, IPPROTO_TCP, TCP_KEEPIDLE, (unsigned char*)&socksval, sizeof(socksval))) { // 设置tcp心跳包参数
                     printf ("set socket keepidle fail, fd:%d, in %s, at %d\n", serverfd, __FILE__, __LINE__);
                     continue;
                 }
                 socksval = KEEPINTVL;
-                if (setsockopt (serverfd, SOL_TCP, TCP_KEEPINTVL, (unsigned char*)&socksval, sizeof(socksval))) { // 设置tcp心跳包参数
+                if (setsockopt (serverfd, IPPROTO_TCP, TCP_KEEPINTVL, (unsigned char*)&socksval, sizeof(socksval))) { // 设置tcp心跳包参数
                     printf ("set socket keepintvl fail, fd:%d, in %s, at %d\n", serverfd, __FILE__, __LINE__);
                     continue;
                 }
                 socksval = KEEPCNT;
-                if (setsockopt (serverfd, SOL_TCP, TCP_KEEPCNT, (unsigned char*)&socksval, sizeof(socksval))) { // 设置tcp心跳包参数
+                if (setsockopt (serverfd, IPPROTO_TCP, TCP_KEEPCNT, (unsigned char*)&socksval, sizeof(socksval))) { // 设置tcp心跳包参数
                     printf ("set socket keepcnt fail, fd:%d, in %s, at %d\n", serverfd, __FILE__, __LINE__);
                     continue;
                 }
