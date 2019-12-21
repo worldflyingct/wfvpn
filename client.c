@@ -23,6 +23,9 @@
 #define MAX_EVENT         1024
 #define MAX_ACCEPT        1024
 #define MTU_SIZE          1500
+#define KEEPIDLE          60 // tcp完全没有数据传输的最长间隔为60s，操过60s就要发送询问数据包
+#define KEEPINTVL         5  // 如果询问失败，间隔多久再次发出询问数据包
+#define KEEPCNT           3  // 如果询问失败，间隔多久再次发出询问数据包
 
 struct PACKAGELIST {
     unsigned char package[MTU_SIZE];
@@ -336,53 +339,75 @@ int main () {
         printf ("create socket fd fail, in %s, at %d\n",  __FILE__, __LINE__);
         return -3;
     }
-    if (setnonblocking (clientfd) < 0) {
+    if (setnonblocking (clientfd) < 0) { // 设置为非阻塞IO
         printf ("set nonblocking fail, fd:%d, in %s, at %d\n", clientfd, __FILE__, __LINE__);
         return -4;
     }
     static unsigned int socksval = 1;
-    if (setsockopt (clientfd, IPPROTO_TCP, TCP_NODELAY, (unsigned char*)&socksval, sizeof (socksval))) {
+    if (setsockopt (clientfd, IPPROTO_TCP, TCP_NODELAY, (unsigned char*)&socksval, sizeof (socksval))) { // 关闭Nagle协议
         printf ("close Nagle protocol fail, fd:%d, in %s, at %d\n", clientfd, __FILE__, __LINE__);
         return -5;
+    }
+    socksval = 1;
+    if (setsockopt (clientfd, SOL_SOCKET, SO_KEEPALIVE, (unsigned char*)&socksval, sizeof(socksval))) { // 启动tcp心跳包
+        printf ("set socket keepalive fail, fd:%d, in %s, at %d\n", clientfd, __FILE__, __LINE__);
+        return -6;
+    }
+    socksval = KEEPIDLE;
+    if (setsockopt (clientfd, SOL_TCP, TCP_KEEPIDLE, (unsigned char*)&socksval, sizeof(socksval))) { // 设置tcp心跳包参数
+        printf ("set socket keepidle fail, fd:%d, in %s, at %d\n", clientfd, __FILE__, __LINE__);
+        return -7;
+    }
+    socksval = KEEPINTVL;
+    if (setsockopt (clientfd, SOL_TCP, TCP_KEEPINTVL, (unsigned char*)&socksval, sizeof(socksval))) { // 设置tcp心跳包参数
+        printf ("set socket keepintvl fail, fd:%d, in %s, at %d\n", clientfd, __FILE__, __LINE__);
+        return -8;
+    }
+    socksval = KEEPCNT;
+    if (setsockopt (clientfd, SOL_TCP, TCP_KEEPCNT, (unsigned char*)&socksval, sizeof(socksval))) { // 设置tcp心跳包参数
+        printf ("set socket keepcnt fail, fd:%d, in %s, at %d\n", clientfd, __FILE__, __LINE__);
+        return -9;
     }
 #if ((defined RESETSNDBUF) || (defined RESETRCVBUF))
     static socklen_t socksval_len;
 #endif
 #ifdef RESETSNDBUF
+    // 修改发送缓冲区大小
     socksval_len = sizeof (socksval);
     if (getsockopt(clientfd, SOL_SOCKET, SO_SNDBUF, (unsigned char*)&socksval, &socksval_len)) {
         printf ("get send buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
-        return -6;
+        return -10;
     }
     printf ("old send buffer is %d, socksval_len:%d, in %s, at %d\n", socksval, socksval_len,  __FILE__, __LINE__);
     socksval = MAXDATASIZE - MTU_SIZE;
     if (setsockopt(clientfd, SOL_SOCKET, SO_SNDBUF, (unsigned char*)&socksval, sizeof (socksval))) {
         printf ("set send buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
-        return -7;
+        return -11;
     }
     socksval_len = sizeof (socksval);
     if (getsockopt(clientfd, SOL_SOCKET, SO_SNDBUF, (unsigned char*)&socksval, &socksval_len)) {
         printf ("get send buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
-        return -8;
+        return -12;
     }
     printf ("new send buffer is %d, socksval_len:%d, in %s, at %d\n", socksval, socksval_len,  __FILE__, __LINE__);
 #endif
 #ifdef RESETSNDBUF
+    // 修改接收缓冲区大小
     socksval_len = sizeof (socksval);
     if (getsockopt(clientfd, SOL_SOCKET, SO_RCVBUF, (unsigned char*)&socksval, &socksval_len)) {
         printf ("get receive buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
-        return -9;
+        return -13;
     }
     printf ("old receive buffer is %d, len:%d, in %s, at %d\n", socksval, socksval_len,  __FILE__, __LINE__);
     socksval = MAXDATASIZE - MTU_SIZE;
     if (setsockopt(clientfd, SOL_SOCKET, SO_RCVBUF, (unsigned char*)&socksval, sizeof (socksval))) {
         printf ("set receive buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
-        return -10;
+        return -14;
     }
     socksval_len = sizeof (socksval);
     if (getsockopt(clientfd, SOL_SOCKET, SO_RCVBUF, (unsigned char*)&socksval, &socksval_len)) {
         printf ("get receive buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
-        return -11;
+        return -15;
     }
     printf ("new receive buffer is %d, socksval_len:%d, in %s, at %d\n", socksval, socksval_len,  __FILE__, __LINE__);
 #endif
@@ -397,15 +422,15 @@ int main () {
     epollfd = epoll_create (MAX_EVENT);
     if (epollfd < 0) {
         printf ("create epoll fd fail, in %s, at %d\n",  __FILE__, __LINE__);
-        return -12;
+        return -16;
     }
     if (addtoepoll (epollfd, clientfd)) {
         printf ("clientfd addtoepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
-        return -13;
+        return -17;
     }
     if (addtoepoll (epollfd, tunfd)) {
         printf ("tunfd addtoepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
-        return -14;
+        return -18;
     }
     loginserver ();
     while (1) {
@@ -420,18 +445,18 @@ int main () {
                 close (clientfd);
                 close (epollfd);
                 printf ("receive error event 0x%08x, in %s, at %d\n", evs[i].events,  __FILE__, __LINE__);
-                return -15;
+                return -19;
             } else if (events & EPOLLIN) {
                 if (readdata (epollfd, fd)) {
                     close (tunfd);
                     close (clientfd);
                     close (epollfd);
-                    return -16;
+                    return -20;
                 }
             } else if (events & EPOLLOUT) {
                 if (modepoll (epollfd, fd, 0)) {
                     printf ("modepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
-                    return -17;
+                    return -21;
                 }
                 if (fd == tun.fd) {
                     tun.canwrite = 1;
