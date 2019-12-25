@@ -32,8 +32,8 @@ struct PACKAGELIST {
     unsigned int size;
     struct PACKAGELIST *tail;
 };
-struct PACKAGELIST* packagelisthead = NULL;
-struct PACKAGELIST* packagelisttail;
+struct PACKAGELIST* remainpackagelisthead = NULL;
+struct PACKAGELIST* remainpackagelisttail;
 struct CLIENTLIST {
     int fd;
     int canwrite;
@@ -131,15 +131,15 @@ int removeclient (int epollfd, int fd) {
         clientlist->head->tail = clientlist->tail;
         clientlist->tail->head = clientlist->head;
     }
-    if (packagelisthead == NULL) {
-        packagelisthead = clientlist->packagelisthead;
-        packagelisttail = packagelisthead;
+    if (remainpackagelisthead == NULL) {
+        remainpackagelisthead = clientlist->packagelisthead;
+        remainpackagelisttail = remainpackagelisthead;
     } else {
-        packagelisttail->tail = clientlist->packagelisthead;
+        remainpackagelisttail->tail = clientlist->packagelisthead;
     }
-    if (packagelisttail != NULL) {
-        while (packagelisttail->tail != NULL) {
-            packagelisttail = packagelisttail->tail;
+    if (remainpackagelisttail != NULL) {
+        while (remainpackagelisttail->tail != NULL) {
+            remainpackagelisttail = remainpackagelisttail->tail;
         }
     }
     printf ("host %d.%d.%d.%d disconnect, in %s, at %d\n", clientlist->ip[0], clientlist->ip[1], clientlist->ip[2], clientlist->ip[3],  __FILE__, __LINE__);
@@ -244,15 +244,15 @@ int writenode (int epollfd, struct CLIENTLIST* clientlist) {
     while (packagelist != NULL) {
         memcpy (packages+offset, packagelist->package, packagelist->size);
         offset += packagelist->size;
-        if (packagelisthead == NULL) {
-            packagelisthead = packagelist;
-            packagelisttail = packagelisthead;
+        if (remainpackagelisthead == NULL) {
+            remainpackagelisthead = packagelist;
+            remainpackagelisttail = remainpackagelisthead;
         } else {
-            packagelisttail->tail = packagelist;
-            packagelisttail = packagelisttail->tail;
+            remainpackagelisttail->tail = packagelist;
+            remainpackagelisttail = remainpackagelisttail->tail;
         }
         packagelist = packagelist->tail;
-        packagelisttail->tail = NULL;
+        remainpackagelisttail->tail = NULL;
     }
     clientlist->packagelisthead = NULL;
     clientlist->totalsize = 0;
@@ -405,9 +405,9 @@ int readdata (int epollfd, int fd) {
                 continue;
             }
             struct PACKAGELIST* packagelist;
-            if (packagelisthead != NULL) { // 全局数据包回收站不为空
-                packagelist = packagelisthead;
-                packagelisthead = packagelisthead->tail;
+            if (remainpackagelisthead != NULL) { // 全局数据包回收站不为空
+                packagelist = remainpackagelisthead;
+                remainpackagelisthead = remainpackagelisthead->tail;
             } else {
                 packagelist = (struct PACKAGELIST*) malloc (sizeof (struct PACKAGELIST));
                 if (packagelist == NULL) {
