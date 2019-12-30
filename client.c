@@ -444,7 +444,7 @@ int main () {
                 close (tunfd);
                 close (clientfd);
                 close (epollfd);
-                printf ("receive error event 0x%08x, in %s, at %d\n", evs[i].events,  __FILE__, __LINE__);
+                printf ("receive error event, fd:%d, EPOLLERR:%d, EPOLLHUP:%d, EPOLLRDHUP:%d, in %s, at %d\n", fd, events&EPOLLERR ? 1 : 0, events&EPOLLHUP ? 1 : 0, events&EPOLLRDHUP ? 1 : 0,  __FILE__, __LINE__);
                 return -19;
             } else if (events & EPOLLIN) {
                 if (readdata (epollfd, fd)) {
