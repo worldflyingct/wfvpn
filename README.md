@@ -28,7 +28,7 @@ echo 1 > /proc/sys/net/ipv4/ip_forward
 
 iptables -A FORWARD -d 192.168.23.20/32 -p tcp --dport 80 -j ACCEPT
 iptables -t nat -A PREROUTING -p tcp --dport 80 -j DNAT --to 192.168.23.20:80
-iptables -t nat -A POSTROUTING -p tcp -d 192.168.23.20 --dport 80 -j MASQUERADE
+iptables -t nat -A POSTROUTING -p tcp -d 192.168.23.20/32 --dport 80 -j MASQUERADE
 ```
 
 ## 未来展望
