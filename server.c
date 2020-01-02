@@ -1,5 +1,5 @@
 #define tundevip          "192.168.23.1/24"
-#define serverport        3478
+#define serverport        3480
 #define password          "vCIhnEMbk9wgK4uUxCptm4bFxAAkGdTs" // 密码固定为32位
 
 #include <stdio.h>

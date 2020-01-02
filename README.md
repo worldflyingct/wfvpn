@@ -16,8 +16,8 @@
 ## 编译命令
 
 ```
-gcc -static -O3 -o server server.c
-gcc -static -O3 -o client client.c
+gcc -static -std=gnu99 -O3 -o server server.c
+gcc -static -std=gnu99 -O3 -o client client.c
 ```
 
 ## iptables设置
