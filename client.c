@@ -184,11 +184,13 @@ int writenode (int epollfd, struct CLIENTLIST* clientlist) {
     clientlist->totalsize = 0;
     int len = write (clientlist->fd, packages, totalsize);
     if (len < totalsize) { // 缓冲区不足，已无法继续写入数据。
-        if (modepoll (epollfd, clientlist->fd, EPOLLOUT)) {
-            printf ("modepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
-            return -2;
+        if (clientlist->canwrite) { // 之前缓冲区是可以写入的，现在不行了
+            if (modepoll (epollfd, clientlist->fd, EPOLLOUT)) { // 监听可写事件
+                printf ("modepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
+                return -2;
+            }
+            clientlist->canwrite = 0;
         }
-        clientlist->canwrite = 0;
         if (len > 0) { // 写入了一部分数据
             unsigned int size = totalsize - len;
             if (clientlist->bufsize < size) {
@@ -205,6 +207,12 @@ int writenode (int epollfd, struct CLIENTLIST* clientlist) {
             memcpy (clientlist->buffer, packages+len, size);
             clientlist->usefulsize = size;
         }
+    } else if (clientlist->canwrite == 0) { // 缓冲区尚有空间，并且之前已经提示不足
+        if (modepoll (epollfd, clientlist->fd, 0)) { // 取消监听可写事件
+            printf ("modepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
+            return -4;
+        }
+        clientlist->canwrite = 1;
     }
     return 0;
 }
@@ -454,15 +462,9 @@ int main () {
                     return -20;
                 }
             } else if (events & EPOLLOUT) {
-                if (modepoll (epollfd, fd, 0)) {
-                    printf ("modepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
-                    return -21;
-                }
                 if (fd == tun.fd) {
-                    tun.canwrite = 1;
                     writenode (epollfd, &tun);
                 } else {
-                    client.canwrite = 1;
                     writenode (epollfd, &client);
                 }
             } else {
