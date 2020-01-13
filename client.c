@@ -191,22 +191,20 @@ int writenode (int epollfd, struct CLIENTLIST* clientlist) {
             }
             clientlist->canwrite = 0;
         }
-        if (len > 0) { // 写入了一部分数据
-            unsigned int size = totalsize - len;
-            if (clientlist->bufsize < size) {
-                clientlist->bufsize = size;
-                if (clientlist->buffer != NULL) {
-                    free (clientlist->buffer);
-                }
-                clientlist->buffer = (unsigned char*) malloc (clientlist->bufsize * sizeof (unsigned char));
-                if (clientlist->buffer == NULL) {
-                    printf ("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
-                    return -3;
-                }
+        unsigned int size = totalsize - len;
+        if (clientlist->bufsize < size) {
+            clientlist->bufsize = size;
+            if (clientlist->buffer != NULL) {
+                free (clientlist->buffer);
             }
-            memcpy (clientlist->buffer, packages+len, size);
-            clientlist->usefulsize = size;
+            clientlist->buffer = (unsigned char*) malloc (clientlist->bufsize * sizeof (unsigned char));
+            if (clientlist->buffer == NULL) {
+                printf ("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
+                return -3;
+            }
         }
+        memcpy (clientlist->buffer, packages+len, size);
+        clientlist->usefulsize = size;
     } else if (clientlist->canwrite == 0) { // 缓冲区尚有空间，并且之前已经提示不足
         if (modepoll (epollfd, clientlist->fd, 0)) { // 取消监听可写事件
             printf ("modepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
