@@ -20,8 +20,7 @@
 #define RESETSNDBUF       // 重设socket的写缓冲大小
 #define RESETRCVBUF       // 重设socket的读缓冲大小
 #define MAX_EVENT         1024
-#define MAX_ACCEPT        1024
-#define MAX_CONNECT       256
+#define MAX_CONNECT       1024
 #define MTU_SIZE          1500
 #define KEEPIDLE          60 // tcp完全没有数据传输的最长间隔为60s，操过60s就要发送询问数据包
 #define KEEPINTVL         5  // 如果询问失败，间隔多久再次发出询问数据包
