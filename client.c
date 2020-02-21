@@ -23,6 +23,7 @@
 #define KEEPIDLE          60 // tcp完全没有数据传输的最长间隔为60s，操过60s就要发送询问数据包
 #define KEEPINTVL         5  // 如果询问失败，间隔多久再次发出询问数据包
 #define KEEPCNT           3  // 如果询问失败，间隔多久再次发出询问数据包
+#define RETRYINTERVAL     5  // 如果重要链接断掉了，重连间隔时间，单位秒
 
 struct PACKAGELIST {
     unsigned char data[MTU_SIZE + 18];
@@ -47,13 +48,13 @@ struct CLIENTLIST* socketclient = &sclient;
 int epollfd;
 
 int setnonblocking (int fd) {
-    int flags = fcntl (fd, F_GETFL, 0);
+    int flags = fcntl(fd, F_GETFL, 0);
     if (flags < 0) {
-        printf ("get flags fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
+        printf("get flags fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
         return -1;
     }
-    if(fcntl (fd, F_SETFL, flags | O_NONBLOCK) < 0) {
-        printf ("set flags fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
+    if(fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+        printf("set flags fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
         return -1;
     }
     return 0;
@@ -63,14 +64,14 @@ int addtoepoll (struct CLIENTLIST* fdclient) {
     struct epoll_event ev;
     ev.data.ptr = fdclient;
     ev.events = EPOLLIN | EPOLLERR | EPOLLHUP | EPOLLRDHUP; // 水平触发，保证所有数据都能读到
-    return epoll_ctl (epollfd, EPOLL_CTL_ADD, fdclient->fd, &ev);
+    return epoll_ctl(epollfd, EPOLL_CTL_ADD, fdclient->fd, &ev);
 }
 
 int modepoll (struct CLIENTLIST* client, int flags) {
     struct epoll_event ev;
     ev.data.ptr = client;
     ev.events = EPOLLIN | EPOLLERR | EPOLLHUP | EPOLLRDHUP | flags; // 水平触发，保证所有数据都能读到
-    return epoll_ctl (epollfd, EPOLL_CTL_MOD, client->fd, &ev);
+    return epoll_ctl(epollfd, EPOLL_CTL_MOD, client->fd, &ev);
 }
 
 int writenode (struct CLIENTLIST* client) {
@@ -80,17 +81,17 @@ int writenode (struct CLIENTLIST* client) {
     if (maxtotalsize < totalsize) {
         maxtotalsize = totalsize;
         if (packages != NULL) {
-            free (packages);
+            free(packages);
         }
-        packages = (unsigned char*) malloc (maxtotalsize * sizeof (unsigned char));
+        packages = (unsigned char*) malloc(maxtotalsize * sizeof(unsigned char));
         if (packages == NULL) {
-            printf ("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
+            printf("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
             return -1;
         }
     }
     int32_t offset = client->usefulsize;
     if (offset > 0) { // buffer不为空
-        memcpy (packages, client->buffer, offset);
+        memcpy(packages, client->buffer, offset);
         client->usefulsize = 0;
     }
     struct PACKAGELIST* package = client->packagelisthead;
@@ -108,12 +109,12 @@ int writenode (struct CLIENTLIST* client) {
     int32_t len = write(client->fd, packages, totalsize);
     if (len < totalsize) { // 缓冲区不足，已无法继续写入数据。
         if (len < 0) {
-            printf ("write node fail, fd:%d, in %s, at %d\n", client->fd,  __FILE__, __LINE__);
+            printf("write node fail, type:%d, len:%d, totalsize:%d, in %s, at %d\n", client == tapclient ? 0 : 1, len, totalsize,  __FILE__, __LINE__);
             return -2;
         }
         if (client->canwrite) { // 之前缓冲区是可以写入的，现在不行了
-            if (modepoll (client, EPOLLOUT)) { // 监听可写事件
-                printf ("modepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
+            if (modepoll(client, EPOLLOUT)) { // 监听可写事件
+                printf("modepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
                 return -3;
             }
             client->canwrite = 0;
@@ -122,11 +123,11 @@ int writenode (struct CLIENTLIST* client) {
         if (client->bufsize < size) {
             client->bufsize = size;
             if (client->buffer != NULL) {
-                free (client->buffer);
+                free(client->buffer);
             }
-            client->buffer = (unsigned char*) malloc (client->bufsize * sizeof (unsigned char));
+            client->buffer = (unsigned char*) malloc(client->bufsize * sizeof(unsigned char));
             if (client->buffer == NULL) {
-                printf ("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
+                printf("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
                 return -4;
             }
         }
@@ -134,7 +135,7 @@ int writenode (struct CLIENTLIST* client) {
         client->usefulsize = size;
     } else if (client->canwrite == 0) { // 缓冲区尚有空间，并且之前已经提示不足
         if (modepoll(client, 0)) { // 取消监听可写事件
-            printf ("modepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
+            printf("modepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
             return -5;
         }
         client->canwrite = 1;
@@ -172,9 +173,9 @@ int readdata (struct CLIENTLIST* client) {
             if (readbuff != NULL) {
                 free (readbuff);
             }
-            readbuff = (unsigned char*) malloc (totalsize * sizeof (unsigned char));
+            readbuff = (unsigned char*) malloc(totalsize * sizeof(unsigned char));
             if (readbuff == NULL) {
-                printf ("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
+                printf("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
                 return -3;
             }
         }
@@ -205,9 +206,9 @@ int readdata (struct CLIENTLIST* client) {
             package = remainpackagelisthead;
             remainpackagelisthead = remainpackagelisthead->tail;
         } else {
-            package = (struct PACKAGELIST*) malloc (sizeof (struct PACKAGELIST));
+            package = (struct PACKAGELIST*) malloc(sizeof(struct PACKAGELIST));
             if (package == NULL) {
-                printf ("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
+                printf("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
                 offset += packagesize;
                 continue;
             }
@@ -246,7 +247,7 @@ int tap_alloc () {
         return -1;
     }
     struct ifreq ifr;
-    memset(&ifr, 0, sizeof (ifr));
+    memset(&ifr, 0, sizeof(ifr));
     ifr.ifr_flags = IFF_TAP | IFF_NO_PI;
     if (ioctl(fd, TUNSETIFF, (void *) &ifr) < 0) {
         printf("ioctl tun node fail, in %s, at %d\n", __FILE__, __LINE__);
@@ -279,10 +280,10 @@ int connect_socketfd (unsigned char* ip, unsigned int port) {
     struct sockaddr_in sin;
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) {
-        printf ("run socket function is fail, in %s, at %d\n", __FILE__, __LINE__);
+        printf("run socket function is fail, in %s, at %d\n", __FILE__, __LINE__);
         return -1;
     }
-    memset(&sin, 0, sizeof (struct sockaddr_in));
+    memset(&sin, 0, sizeof(struct sockaddr_in));
     sin.sin_family = AF_INET; // ipv4
     in_addr_t _ip = inet_addr(ip); // 服务器ip地址，这里不能输入域名
     if (_ip == INADDR_NONE) {
@@ -300,14 +301,14 @@ int connect_socketfd (unsigned char* ip, unsigned int port) {
     unsigned char data[3+sizeof(password)-1];
     memset(data, 0, 3);
     memcpy(data + 3, password, sizeof(password)-1);
-    write(fd, data, sizeof (data));
+    write(fd, data, sizeof(data));
     if (setnonblocking(fd) < 0) { // 设置为非阻塞IO
         printf("set nonblocking fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
         close(fd);
         return -4;
     }
     unsigned int socksval = 1;
-    if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (unsigned char*)&socksval, sizeof (socksval))) { // 关闭Nagle协议
+    if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (unsigned char*)&socksval, sizeof(socksval))) { // 关闭Nagle协议
         printf("close Nagle protocol fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
         close(fd);
         return -5;
@@ -316,25 +317,25 @@ int connect_socketfd (unsigned char* ip, unsigned int port) {
     socksval = 1;
     if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, (unsigned char*)&socksval, sizeof(socksval))) { // 启动tcp心跳包
         printf("set socket keepalive fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
-        close (fd);
+        close(fd);
         return -6;
     }
     socksval = KEEPIDLE;
     if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, (unsigned char*)&socksval, sizeof(socksval))) { // 设置tcp心跳包参数
         printf("set socket keepidle fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
-        close (fd);
+        close(fd);
         return -7;
     }
     socksval = KEEPINTVL;
     if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, (unsigned char*)&socksval, sizeof(socksval))) { // 设置tcp心跳包参数
         printf("set socket keepintvl fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
-        close (fd);
+        close(fd);
         return -8;
     }
     socksval = KEEPCNT;
     if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, (unsigned char*)&socksval, sizeof(socksval))) { // 设置tcp心跳包参数
         printf("set socket keepcnt fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
-        close (fd);
+        close(fd);
         return -9;
     }
 #endif
@@ -342,20 +343,20 @@ int connect_socketfd (unsigned char* ip, unsigned int port) {
     socklen_t socksval_len = sizeof(socksval);
     if (getsockopt(fd, SOL_SOCKET, SO_SNDBUF, (unsigned char*)&socksval, &socksval_len)) {
         printf("get send buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
-        close (fd);
+        close(fd);
         return -10;
     }
     printf("old send buffer is %d, socksval_len:%d, in %s, at %d\n", socksval, socksval_len,  __FILE__, __LINE__);
     socksval = MAXDATASIZE - MTU_SIZE;
-    if (setsockopt(fd, SOL_SOCKET, SO_SNDBUF, (unsigned char*)&socksval, sizeof (socksval))) {
+    if (setsockopt(fd, SOL_SOCKET, SO_SNDBUF, (unsigned char*)&socksval, sizeof(socksval))) {
         printf("set send buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
-        close (fd);
+        close(fd);
         return -11;
     }
     socksval_len = sizeof(socksval);
     if (getsockopt(fd, SOL_SOCKET, SO_SNDBUF, (unsigned char*)&socksval, &socksval_len)) {
         printf("get send buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
-        close (fd);
+        close(fd);
         return -12;
     }
     printf("new send buffer is %d, socksval_len:%d, in %s, at %d\n", socksval, socksval_len,  __FILE__, __LINE__);
@@ -363,20 +364,20 @@ int connect_socketfd (unsigned char* ip, unsigned int port) {
     socksval_len = sizeof(socksval);
     if (getsockopt(fd, SOL_SOCKET, SO_RCVBUF, (unsigned char*)&socksval, &socksval_len)) {
         printf("get receive buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
-        close (fd);
+        close(fd);
         return -13;
     }
     printf("old receive buffer is %d, len:%d, in %s, at %d\n", socksval, socksval_len,  __FILE__, __LINE__);
     socksval = MAXDATASIZE - MTU_SIZE;
-    if (setsockopt(fd, SOL_SOCKET, SO_RCVBUF, (unsigned char*)&socksval, sizeof (socksval))) {
+    if (setsockopt(fd, SOL_SOCKET, SO_RCVBUF, (unsigned char*)&socksval, sizeof(socksval))) {
         printf("set receive buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
-        close (fd);
+        close(fd);
         return -14;
     }
     socksval_len = sizeof(socksval);
     if (getsockopt(fd, SOL_SOCKET, SO_RCVBUF, (unsigned char*)&socksval, &socksval_len)) {
         printf("get receive buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
-        close (fd);
+        close(fd);
         return -15;
     }
     printf("new receive buffer is %d, socksval_len:%d, in %s, at %d\n", socksval, socksval_len,  __FILE__, __LINE__);
@@ -390,7 +391,7 @@ int connect_socketfd (unsigned char* ip, unsigned int port) {
     socketclient->canwrite = 1;
     if (addtoepoll(socketclient)) {
         printf("tunfd addtoepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
-        close (fd);
+        close(fd);
         return -16;
     }
     return 0;
@@ -406,16 +407,16 @@ int removeclient (struct CLIENTLIST* client) {
     }
     if (client == socketclient) { // 常规情况
         do {
-            sleep(2);
+            sleep(RETRYINTERVAL);
             printf("try connect tcp socket again, in %s, at %d\n", __FILE__, __LINE__);
         }
-        while (connect_socketfd (serverip, serverport));
+        while (connect_socketfd(serverip, serverport));
     } else { // 基本不可能情况
         do {
+            sleep(RETRYINTERVAL);
             printf("try connect tap driver again, in %s, at %d\n", __FILE__, __LINE__);
-            sleep(2);
         }
-        while (tap_alloc ());
+        while (tap_alloc());
     }
     return 0;
 }
@@ -430,14 +431,14 @@ int main () {
         printf("alloc tap fail, in %s, at %d\n",  __FILE__, __LINE__);
         return -2;
     }
-    if (connect_socketfd (serverip, serverport)) {
+    if (connect_socketfd(serverip, serverport)) {
         printf("create socket fd fail, in %s, at %d\n",  __FILE__, __LINE__);
         return -3;
     }
     while (1) {
         static struct epoll_event evs[MAX_EVENT];
         static int wait_count;
-        wait_count = epoll_wait (epollfd, evs, MAX_EVENT, -1);
+        wait_count = epoll_wait(epollfd, evs, MAX_EVENT, -1);
         for (int i = 0 ; i < wait_count ; i++) {
             struct CLIENTLIST* client = evs[i].data.ptr;
             uint32_t events = evs[i].events;
@@ -449,8 +450,7 @@ int main () {
                     removeclient(client);
                 }
             } else if (events & EPOLLOUT) {
-                struct CLIENTLIST* targetclient = client == tapclient ? socketclient : tapclient;
-                writenode(targetclient);
+                writenode(client);
             } else {
                 printf("receive new event 0x%08x, in %s, at %d\n", evs[i].events,  __FILE__, __LINE__);
             }

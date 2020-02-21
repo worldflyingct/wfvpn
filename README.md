@@ -4,7 +4,7 @@
 
 ## 为什么要开发它呢?
 
-因为随着公司业务的发展，公司对服务器配置的要求也越来越高了，可是由于高配的云服务器价格居高不下，如果自己牵独立ip的宽带，或是服务器托管，成本也不小。考虑到成本问题，小沃决定买一台低配的云服务器，然后通过linux的tap/tun技术通过tcp通道，在云服务器与本地服务器之间建立一条虚拟的通道，然后利用iptables将特定的端口映射到本地的服务器去。总而言之一句话，就是为了省钱。
+因为随着公司业务的发展，公司对服务器配置的要求也越来越高了，可是由于高配的云服务器价格居高不下，如果自己牵独立ip的宽带，或是服务器托管，成本也不小。考虑到成本问题，小沃决定买一台低配的云服务器，然后利用类似vpn技术将公网的ip映射到本地服务器。总而言之一句话，就是为了省钱。
 
 ## 它能做什么
 
@@ -13,6 +13,10 @@
 2. 可以自定义端口，防止与你正在使用的端口相冲突。
 3. 不适合翻墙，不适合翻墙，只是用于建立虚拟局域网用的。
 
+## 工作原理
+
+该服务是基于linux的tun/tap驱动实现，最新版本使用的是tap模式，其原理可以看作一台虚拟交换机。全部使用的是异步IO，单线程模式，利用Linux的epoll接口以实现高并发。
+
 ## 编译命令
 
 ```
@@ -20,15 +24,41 @@ gcc -static -std=gnu99 -O3 -o server server.c
 gcc -static -std=gnu99 -O3 -o client client.c
 ```
 
-## iptables设置
+## 系统设置
+
+考虑到其编译的灵活性，系统并不会主动给虚拟网卡配置ip，需要等待启动了应用程序后通过如下命令配置ip以及启动网卡:
+```
+ip address add 192.168.23.1/24 dev tap0
+ip link set tap0 up
+```
+tap的编号会随着启动的程序数量变化而变化，从0开始。
 
 需要启动内核的路由转发以及端口的路由转发许可。
 ```
 echo 1 > /proc/sys/net/ipv4/ip_forward
-
+```
+然后在特定地点设置静态路由
+linux的设置方式如下:
+```
+添加: ip route add 10.0.3.0/24 via 10.0.18.1
+删除: ip route del 10.0.3.0/24 via 10.0.18.1
+查看: ip route
+```
+windows的设置方式如下:
+```
+添加: route add 10.0.18.0 mask 255.255.255.0 10.0.3.1
+删除: route delete 10.0.18.0 mask 255.255.255.0 10.0.3.1
+查看: route print
+```
+如果需要ip映射，就需要用到iptables，请运行如下命令:
+```
 iptables -A FORWARD -d 192.168.23.20/32 -p tcp --dport 80 -j ACCEPT
 iptables -t nat -A PREROUTING -p tcp --dport 80 -j DNAT --to 192.168.23.20:80
 iptables -t nat -A POSTROUTING -p tcp -d 192.168.23.20/32 --dport 80 -j MASQUERADE
+```
+另外，考虑到该项目是模拟交换机工作，运行时系统会发送arp数据包进行arp学习，如果要查询系统的arp缓存，可以运行如下命令:
+```
+cat /proc/net/arp
 ```
 
 ## 未来展望
@@ -45,4 +75,4 @@ iptables -t nat -A POSTROUTING -p tcp -d 192.168.23.20/32 --dport 80 -j MASQUERA
 
 ## 参考资料
 
-https://blog.csdn.net/GarfieldGCat/article/details/81435742
+[以太网帧格式](https://blog.csdn.net/GarfieldGCat/article/details/81435742)
