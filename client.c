@@ -1,6 +1,5 @@
 #define serverip          "192.168.56.101" // 服务器的地址，不支持域名
-#define serverport        3481
-#define clientip          "192.168.23.20/24"
+#define serverport        3480
 #define password          "vCIhnEMbk9wgK4uUxCptm4bFxAAkGdTs" // 密码固定为32位
 
 #include <stdio.h>
@@ -20,6 +19,7 @@
 #define MAXDATASIZE       2*1024*1024
 #define MAX_EVENT         1024
 #define MTU_SIZE          1500
+#define KEEPALIVE            // 如果定义了，就是启动心跳包，不定义就不启动，下面3个参数就没有意义。
 #define KEEPIDLE          60 // tcp完全没有数据传输的最长间隔为60s，操过60s就要发送询问数据包
 #define KEEPINTVL         5  // 如果询问失败，间隔多久再次发出询问数据包
 #define KEEPCNT           3  // 如果询问失败，间隔多久再次发出询问数据包
@@ -259,12 +259,6 @@ int tap_alloc () {
         return -3;
     }
     printf("tap device name is %s, in %s, at %d\n", ifr.ifr_name, __FILE__, __LINE__);
-    char cmd [128];
-    sprintf(cmd, "ip address add "clientip" dev %s", ifr.ifr_name);
-    system(cmd);
-    sprintf(cmd, "ip link set %s up", ifr.ifr_name);
-    system(cmd);
-    printf("tun ip is "clientip", in %s, at %d\n", __FILE__, __LINE__);
     tapclient->fd = fd;
     tapclient->packagelisthead = NULL;
     tapclient->totalsize = 0;
@@ -318,6 +312,7 @@ int connect_socketfd (unsigned char* ip, unsigned int port) {
         close(fd);
         return -5;
     }
+#ifdef KEEPALIVE
     socksval = 1;
     if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, (unsigned char*)&socksval, sizeof(socksval))) { // 启动tcp心跳包
         printf("set socket keepalive fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
@@ -342,6 +337,7 @@ int connect_socketfd (unsigned char* ip, unsigned int port) {
         close (fd);
         return -9;
     }
+#endif
     // 修改发送缓冲区大小
     socklen_t socksval_len = sizeof(socksval);
     if (getsockopt(fd, SOL_SOCKET, SO_SNDBUF, (unsigned char*)&socksval, &socksval_len)) {

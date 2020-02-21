@@ -1,5 +1,4 @@
-#define tundevip          "192.168.23.1/24"
-#define serverport        3481
+#define serverport        3480
 #define password          "vCIhnEMbk9wgK4uUxCptm4bFxAAkGdTs" // 密码固定为32位
 
 #include <stdio.h>
@@ -20,6 +19,7 @@
 #define MAX_EVENT         1024
 #define MAX_CONNECT       51200
 #define MTU_SIZE          1500
+#define KEEPALIVE            // 如果定义了，就是启动心跳包，不定义就不启动，下面3个参数就没有意义。
 #define KEEPIDLE          60 // tcp完全没有数据传输的最长间隔为60s，操过60s就要发送询问数据包
 #define KEEPINTVL         5  // 如果询问失败，间隔多久再次发出询问数据包
 #define KEEPCNT           3  // 如果询问失败，间隔多久再次发出询问数据包
@@ -297,10 +297,10 @@ int readdata (struct FDCLIENT* fdclient) {
             break;
         }
 // 自学习算法开始
-        unsigned int oldhash = 256 * sourceclient->mac[5] + sourceclient->mac[6];
         unsigned int srchash = 256 * buff[offset+12] + buff[offset+13];
         if (sourceclient != machashlist[srchash]) {
             if (sourceclient->mac[0] != 0x00 || sourceclient->mac[1] != 0x00 || sourceclient->mac[2] != 0x00 || sourceclient->mac[3] != 0x00 || sourceclient->mac[4] != 0x00 || sourceclient->mac[5] != 0x00) {
+                unsigned int oldhash = 256 * sourceclient->mac[5] + sourceclient->mac[6];
                 if (sourceclient->hashhead) {
                     sourceclient->hashhead->hashtail = sourceclient->hashtail;
                 } else {
@@ -395,12 +395,6 @@ int tap_alloc () {
         return -3;
     }
     printf("tap device name is %s, in %s, at %d\n", ifr.ifr_name, __FILE__, __LINE__);
-    char cmd[128];
-    sprintf(cmd, "ip address add "tundevip" dev %s", ifr.ifr_name);
-    system(cmd);
-    sprintf(cmd, "ip link set %s up", ifr.ifr_name);
-    system(cmd);
-    printf("tun ip is "tundevip", in %s, at %d\n", __FILE__, __LINE__);
     struct CLIENTLIST* client;
     if (remainclientlisthead) {
         client = remainclientlisthead;
@@ -521,6 +515,7 @@ int addclient (int serverfd) {
         close(newfd);
         return -3;
     }
+#ifdef KEEPALIVE
     socksval = 1;
     if (setsockopt(newfd, SOL_SOCKET, SO_KEEPALIVE, (unsigned char*)&socksval, sizeof(socksval))) { // 启动tcp心跳包
         printf ("set socket keepalive fail, fd:%d, in %s, at %d\n", newfd, __FILE__, __LINE__);
@@ -545,6 +540,7 @@ int addclient (int serverfd) {
         close(newfd);
         return -7;
     }
+#endif
     // 修改发送缓冲区大小
     socklen_t socksval_len = sizeof (socksval);
     if (getsockopt(newfd, SOL_SOCKET, SO_SNDBUF, (unsigned char*)&socksval, &socksval_len)) {
