@@ -42,3 +42,7 @@ iptables -t nat -A POSTROUTING -p tcp -d 192.168.23.20/32 --dport 80 -j MASQUERA
 ## 版权问题
 
 注意，本软件原理简单，但是如果有网友利用本软件开发其他的产品，需要遵守gnu v3协议，将其他相关产品的代码全部开源。
+
+## 参考资料
+
+https://blog.csdn.net/GarfieldGCat/article/details/81435742
