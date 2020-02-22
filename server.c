@@ -27,35 +27,32 @@
 
 struct PACKAGELIST {
     unsigned char data[MTU_SIZE + 18];
-    unsigned int size;
+    int32_t size;
     struct PACKAGELIST *tail;
 };
-struct PACKAGELIST* remainpackagelisthead = NULL;
+struct PACKAGELIST *remainpackagelisthead = NULL;
 struct CLIENTLIST {
     int fd; // 与fdclient中的fd意义一样，只是为了方便使用而已
-    struct FDCLIENT* fdclient; // 与自己相关联的fdclient对象
+    struct FDCLIENT *fdclient; // 与自己相关联的fdclient对象
     unsigned char mac[6]; // 该端口的源mac地址
     struct PACKAGELIST* packagelisthead; // 发给自己这个端口的数据包列表头部
     struct PACKAGELIST* packagelisttail; // 发给自己这个端口的数据包列表尾部
-    int32_t totalsize; // 存在自己的packagelist的总数据包大小
     unsigned char remainpackage[MTU_SIZE + 18]; // 自己接收到的数据出现数据不全，将不全的数据存在这里，等待新的数据将其补全
-    unsigned int remainsize; // 不全的数据大小
-    unsigned char* buffer; // 发给自己的数据发现无法写入，将未成功写入的数据存在这里
-    int32_t bufsize; // 未写入存储空间的最大值
-    int32_t usefulsize; // 未写入存储空间的已使用值
+    int remainsize; // 不全的数据大小
     int canwrite;
     struct CLIENTLIST *hashhead; // 从哈希表中寻找上一个clientlist
     struct CLIENTLIST *hashtail; // 从哈希表中寻找下一个clientlist
     struct CLIENTLIST *head; // 从remainclientlist中寻找下一个可用的clientlist
     struct CLIENTLIST *tail; // 从remainclientlist中寻找下一个可用的clientlist
+    struct CLIENTLIST *writetail; // 用于存储在readdata中发现有写入过程的node
 };
-struct CLIENTLIST* clientlisthead = NULL;
-struct CLIENTLIST* remainclientlisthead = NULL;
-struct CLIENTLIST* machashlist[65536]; // mac地址的hash表，用于快速找到对应的mac
+struct CLIENTLIST *clientlisthead = NULL;
+struct CLIENTLIST *remainclientlisthead = NULL;
+struct CLIENTLIST *machashlist[65536]; // mac地址的hash表，用于快速找到对应的mac
 struct FDCLIENT {
     int fd;
-    struct CLIENTLIST* client;
-    struct FDCLIENT* tail; // 从remainclientlist中寻找下一个可用的clientlist
+    struct CLIENTLIST *client;
+    struct FDCLIENT *tail; // 从remainclientlist中寻找下一个可用的clientlist
 };
 struct FDCLIENT* remainfdclienthead = NULL;
 struct FDCLIENT *fdtap, *fdserver;
@@ -88,76 +85,49 @@ int modepoll (struct FDCLIENT* fdclient, int flags) {
     return epoll_ctl(epollfd, EPOLL_CTL_MOD, fdclient->fd, &ev);
 }
 
-int writenode (struct CLIENTLIST* client) {
-    static unsigned char* packages = NULL;
-    static unsigned int maxtotalsize = 0;
-    unsigned int totalsize = client->usefulsize + client->totalsize;
-    if (maxtotalsize < totalsize) {
-        maxtotalsize = totalsize;
-        if (packages != NULL) {
-            free(packages);
-        }
-        packages = (unsigned char*) malloc(maxtotalsize * sizeof(unsigned char));
-        if (packages == NULL) {
-            printf("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
-            return -1;
-        }
-    }
-    unsigned int offset = client->usefulsize;
-    if (offset > 0) { // buffer不为空
-        memcpy(packages, client->buffer, offset);
-        client->usefulsize = 0;
-    }
-    struct PACKAGELIST* package = client->packagelisthead;
-    while (package) {
-        unsigned int size = package->size;
-        memcpy(packages + offset, package->data, size);
-        offset += size;
-        struct PACKAGELIST* tmppackage = package;
-        package = package->tail;
-        tmppackage->tail = remainpackagelisthead;
-        remainpackagelisthead = tmppackage;
-    }
-    client->packagelisthead = NULL;
-    client->totalsize = 0;
-    int len = write(client->fd, packages, totalsize);
-    if (len < totalsize) { // 缓冲区不足，已无法继续写入数据。
-        if (len < 0) {
-            printf("write node fail, type:%d, len:%d, in %s, at %d\n", fdclient == fdtap ? 0 : 1, len,  __FILE__, __LINE__);
-            return -2;
-        }
-        if (client->canwrite) { // 之前缓冲区是可以写入的，现在不行了
-            if (modepoll(client->fdclient, EPOLLOUT)) { // 监听可写事件
-                printf("modepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
-                return -3;
+int writenode (struct CLIENTLIST* writeclient) {
+    for (struct CLIENTLIST* client = writeclient ; client != NULL ; client = client->writetail) {
+        struct PACKAGELIST* package = client->packagelisthead;
+        client->packagelisthead = NULL;
+        while (package != NULL) {
+            ssize_t len = write(client->fd, package->data, package->size);
+            if (len < package->size) { // 缓冲区不足，已无法继续写入数据。
+                if (len <= 0) {
+                    client->packagelisthead = package;
+                    break;
+                }
+                int32_t size = package->size - len;
+                unsigned char tmpdata[MTU_SIZE + 18];
+                memcpy(tmpdata, package->data + len, size);
+                memcpy(package->data, tmpdata, size);
+                package->size = size;
+                client->packagelisthead = package;
+                if (client->canwrite) { // 之前缓冲区是可以写入的，现在不行了
+                    if (modepoll(client->fdclient, EPOLLOUT)) { // 监听可写事件
+                        printf("modepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
+                        break;
+                    }
+                    client->canwrite = 0;
+                }
+                break;
+            } else if (client->canwrite == 0) { // 缓冲区尚有空间，并且之前已经提示不足
+                if (modepoll(client->fdclient, 0)) { // 取消监听可写事件
+                    printf("modepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
+                    break;
+                }
+                client->canwrite = 1;
             }
-            client->canwrite = 0;
+            struct PACKAGELIST* tmppackage = package;
+            package = package->tail;
+            tmppackage->tail = remainpackagelisthead;
+            remainpackagelisthead = tmppackage;
         }
-        unsigned int size = totalsize - len;
-        if (client->bufsize < size) {
-            client->bufsize = size;
-            if (client->buffer != NULL) {
-                free(client->buffer);
-            }
-            client->buffer = (unsigned char*) malloc(client->bufsize * sizeof(unsigned char));
-            if (client->buffer == NULL) {
-                printf("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
-                return -4;
-            }
-        }
-        memcpy(client->buffer, packages+len, size);
-        client->usefulsize = size;
-    } else if (client->canwrite == 0) { // 缓冲区尚有空间，并且之前已经提示不足
-        if (modepoll(client->fdclient, 0)) { // 取消监听可写事件
-            printf("modepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
-            return -5;
-        }
-        client->canwrite = 1;
     }
     return 0;
 }
 
-int braodcastdata (struct CLIENTLIST* sourceclient, unsigned char* buff, int32_t packagesize) {
+struct CLIENTLIST* braodcastdata (struct CLIENTLIST* sourceclient, unsigned char* buff, int32_t packagesize) {
+    struct CLIENTLIST* writeclient = NULL;
     for (struct CLIENTLIST* client = clientlisthead ; client != NULL ; client = client->tail) {
         if (client == sourceclient) {
             continue;
@@ -188,19 +158,19 @@ int braodcastdata (struct CLIENTLIST* sourceclient, unsigned char* buff, int32_t
             client->packagelisttail->tail = package;
             client->packagelisttail = client->packagelisttail->tail;
         }
-        client->totalsize += package->size;
-        if (client->canwrite) { // 当前socket可写
-            writenode(client);
+        if (client->canwrite) {
+            client->writetail = writeclient;
+            writeclient = client;
         }
     }
-    return 0;
+    return writeclient;
 }
 
 int readdata (struct FDCLIENT* fdclient) {
     static unsigned char readbuf[MAXDATASIZE]; // 这里使用static关键词是为了将数据存储与数据段，减小对栈空间的压力。
     static unsigned char* readbuff = NULL; // 这里是用于存储全部的需要写入的数据buf，
     static unsigned int maxtotalsize = 0;
-    int32_t len;
+    ssize_t len;
     int fd = fdclient->fd;
     if (fdclient == fdtap) { // tap驱动，原始数据，需要自己额外添加数据包长度。
         len = read(fd, readbuf + 2, MAXDATASIZE); // 这里最大只可能是1518
@@ -236,16 +206,12 @@ int readdata (struct FDCLIENT* fdclient) {
                 printf("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
                 return -5;
             }
-            sourceclient->buffer = NULL;
-            sourceclient->bufsize = 0;
         }
         sourceclient->fd = fd;
         memset(sourceclient->mac, 0, 6);
         sourceclient->fdclient = fdclient;
         sourceclient->packagelisthead = NULL;
-        sourceclient->totalsize = 0;
         sourceclient->remainsize = 0;
-        sourceclient->usefulsize = 0;
         sourceclient->canwrite = 1;
         sourceclient->hashhead = NULL;
         sourceclient->hashtail = NULL;
@@ -279,9 +245,11 @@ int readdata (struct FDCLIENT* fdclient) {
         sourceclient->remainsize = 0;
         buff = readbuff;
     } else {
+        // printf("in %s, at %d\n",  __FILE__, __LINE__);
         totalsize = len;
         buff = readbuf;
     }
+    struct CLIENTLIST* writeclient = NULL;
     while (offset < totalsize) {
         if (offset + 64 > totalsize) { // mac帧单个最小必须是64个，小于这个的数据包一定不完整
             int32_t remainsize = totalsize - offset;
@@ -322,7 +290,7 @@ int readdata (struct FDCLIENT* fdclient) {
         unsigned char targetmac[6];
         memcpy(targetmac, buff + offset + 2, 6);
         if (targetmac[0] == 0xff && targetmac[1] == 0xff && targetmac[2] == 0xff && targetmac[3] == 0xff && targetmac[4] == 0xff && targetmac[5] == 0xff) { // 广播帧
-            braodcastdata(sourceclient, buff + offset, packagesize);
+            writeclient = braodcastdata(sourceclient, buff + offset, packagesize);
             offset += packagesize;
             continue;
         }
@@ -334,7 +302,7 @@ int readdata (struct FDCLIENT* fdclient) {
             }
         }
         if (targetclient == NULL) { // mac地址表中不存在，使用广播策略
-            braodcastdata(sourceclient, buff + offset, packagesize);
+            writeclient = braodcastdata(sourceclient, buff + offset, packagesize);
             offset += packagesize;
             continue;
         }
@@ -365,12 +333,19 @@ int readdata (struct FDCLIENT* fdclient) {
             targetclient->packagelisttail->tail = package;
             targetclient->packagelisttail = targetclient->packagelisttail->tail;
         }
-        targetclient->totalsize += package->size;
-        if (targetclient->canwrite) { // 当前socket可写
-            writenode(targetclient);
+        struct CLIENTLIST* tmpclient;
+        for (tmpclient = writeclient ; tmpclient != NULL ; tmpclient = tmpclient->writetail) {
+            if (tmpclient == targetclient) {
+                break;
+            }
+        }
+        if (tmpclient == NULL && targetclient->canwrite) {
+            targetclient->writetail = writeclient;
+            writeclient = targetclient;
         }
         offset += packagesize;
     }
+    writenode(writeclient);
     return 0;
 }
 
@@ -406,15 +381,11 @@ int tap_alloc () {
             close(fd);
             return -4;
         }
-        client->buffer = NULL;
-        client->bufsize = 0;
     }
     client->fd = fd;
     memset(client->mac, 0, 6);
     client->packagelisthead = NULL;
-    client->totalsize = 0;
     client->remainsize = 0;
-    client->usefulsize = 0;
     client->canwrite = 1;
     client->hashhead = NULL;
     client->hashtail = NULL;
@@ -689,6 +660,7 @@ int main () {
                     continue;
                 }
             } else if (events & EPOLLOUT) { // 数据可写
+                fdclient->client->writetail = NULL;
                 writenode(fdclient->client);
             } else {
                 printf("receive new event 0x%08x, in %s, at %d\n", events,  __FILE__, __LINE__);
