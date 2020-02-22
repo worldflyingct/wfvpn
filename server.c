@@ -179,7 +179,7 @@ int readdata (struct FDCLIENT *fdclient) {
     int fd = fdclient->fd;
     if (fdclient == fdtap) { // tap驱动，原始数据，需要自己额外添加数据包长度。
         len = read(fd, readbuf + 2, MAXDATASIZE); // 这里最大只可能是1518
-        if (len <= 0) {
+        if (len < 0) {
             perror("tap read error");
             return -1;
         }
@@ -188,7 +188,7 @@ int readdata (struct FDCLIENT *fdclient) {
         len += 2;
     } else { // 网络套接字。
         len = read(fd, readbuf, MAXDATASIZE);
-        if (len <= 0) {
+        if (len < 0) {
             perror("socket read error");
             return -2;
         }
