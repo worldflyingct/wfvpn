@@ -35,8 +35,8 @@ struct CLIENTLIST {
     int fd; // 与fdclient中的fd意义一样，只是为了方便使用而已
     struct FDCLIENT *fdclient; // 与自己相关联的fdclient对象
     unsigned char mac[6]; // 该端口的源mac地址
-    struct PACKAGELIST* packagelisthead; // 发给自己这个端口的数据包列表头部
-    struct PACKAGELIST* packagelisttail; // 发给自己这个端口的数据包列表尾部
+    struct PACKAGELIST *packagelisthead; // 发给自己这个端口的数据包列表头部
+    struct PACKAGELIST *packagelisttail; // 发给自己这个端口的数据包列表尾部
     unsigned char remainpackage[MTU_SIZE + 18]; // 自己接收到的数据出现数据不全，将不全的数据存在这里，等待新的数据将其补全
     int remainsize; // 不全的数据大小
     int canwrite;
@@ -54,7 +54,7 @@ struct FDCLIENT {
     struct CLIENTLIST *client;
     struct FDCLIENT *tail; // 从remainclientlist中寻找下一个可用的clientlist
 };
-struct FDCLIENT* remainfdclienthead = NULL;
+struct FDCLIENT *remainfdclienthead = NULL;
 struct FDCLIENT *fdtap, *fdserver;
 int epollfd;
 
@@ -71,23 +71,23 @@ int setnonblocking (int fd) {
     return 0;
 }
 
-int addtoepoll (struct FDCLIENT* fdclient) {
+int addtoepoll (struct FDCLIENT *fdclient) {
     struct epoll_event ev;
     ev.data.ptr = fdclient;
     ev.events = EPOLLIN | EPOLLERR | EPOLLHUP | EPOLLRDHUP; // 水平触发，保证所有数据都能读到
     return epoll_ctl(epollfd, EPOLL_CTL_ADD, fdclient->fd, &ev);
 }
 
-int modepoll (struct FDCLIENT* fdclient, int flags) {
+int modepoll (struct FDCLIENT *fdclient, int flags) {
     struct epoll_event ev;
     ev.data.ptr = fdclient;
     ev.events = EPOLLIN | EPOLLERR | EPOLLHUP | EPOLLRDHUP | flags; // 水平触发，保证所有数据都能读到
     return epoll_ctl(epollfd, EPOLL_CTL_MOD, fdclient->fd, &ev);
 }
 
-int writenode (struct CLIENTLIST* writeclient) {
-    for (struct CLIENTLIST* client = writeclient ; client != NULL ; client = client->writetail) {
-        struct PACKAGELIST* package = client->packagelisthead;
+int writenode (struct CLIENTLIST *writeclient) {
+    for (struct CLIENTLIST *client = writeclient ; client != NULL ; client = client->writetail) {
+        struct PACKAGELIST *package = client->packagelisthead;
         client->packagelisthead = NULL;
         while (package != NULL) {
             ssize_t len = write(client->fd, package->data, package->size);
@@ -117,7 +117,7 @@ int writenode (struct CLIENTLIST* writeclient) {
                 }
                 client->canwrite = 1;
             }
-            struct PACKAGELIST* tmppackage = package;
+            struct PACKAGELIST *tmppackage = package;
             package = package->tail;
             tmppackage->tail = remainpackagelisthead;
             remainpackagelisthead = tmppackage;
@@ -126,13 +126,13 @@ int writenode (struct CLIENTLIST* writeclient) {
     return 0;
 }
 
-struct CLIENTLIST* braodcastdata (struct CLIENTLIST* sourceclient, unsigned char* buff, int32_t packagesize) {
-    struct CLIENTLIST* writeclient = NULL;
-    for (struct CLIENTLIST* client = clientlisthead ; client != NULL ; client = client->tail) {
+struct CLIENTLIST* braodcastdata (struct CLIENTLIST *sourceclient, unsigned char *buff, int32_t packagesize) {
+    struct CLIENTLIST *writeclient = NULL;
+    for (struct CLIENTLIST *client = clientlisthead ; client != NULL ; client = client->tail) {
         if (client == sourceclient) {
             continue;
         }
-        struct PACKAGELIST* package;
+        struct PACKAGELIST *package;
         if (remainpackagelisthead != NULL) { // 全局数据包回收站不为空
             package = remainpackagelisthead;
             remainpackagelisthead = remainpackagelisthead->tail;
@@ -166,9 +166,9 @@ struct CLIENTLIST* braodcastdata (struct CLIENTLIST* sourceclient, unsigned char
     return writeclient;
 }
 
-int readdata (struct FDCLIENT* fdclient) {
+int readdata (struct FDCLIENT *fdclient) {
     static unsigned char readbuf[MAXDATASIZE]; // 这里使用static关键词是为了将数据存储与数据段，减小对栈空间的压力。
-    static unsigned char* readbuff = NULL; // 这里是用于存储全部的需要写入的数据buf，
+    static unsigned char *readbuff = NULL; // 这里是用于存储全部的需要写入的数据buf，
     static unsigned int maxtotalsize = 0;
     ssize_t len;
     int fd = fdclient->fd;
@@ -187,7 +187,7 @@ int readdata (struct FDCLIENT* fdclient) {
         }
     }
     int32_t offset = 0;
-    struct CLIENTLIST* sourceclient = fdclient->client;
+    struct CLIENTLIST *sourceclient = fdclient->client;
     if (sourceclient == NULL) { // 用户没有找到
         if (readbuf[0] != 0x00 || readbuf[1] != 0x00 || readbuf[2] != 0x00) { // 前两个字节为0代表特殊命令，单独处理。第三个字节为0代表注册。
             printf("just can run login, in %s, at %d\n",  __FILE__, __LINE__);
@@ -226,7 +226,7 @@ int readdata (struct FDCLIENT* fdclient) {
         printf("add client success, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
     }
     int32_t totalsize;
-    unsigned char* buff;
+    unsigned char *buff;
     if (sourceclient->remainsize > 0) {
         totalsize = sourceclient->remainsize + len;
         if (totalsize > maxtotalsize) {
@@ -249,7 +249,7 @@ int readdata (struct FDCLIENT* fdclient) {
         totalsize = len;
         buff = readbuf;
     }
-    struct CLIENTLIST* writeclient = NULL;
+    struct CLIENTLIST *writeclient = NULL;
     while (offset < totalsize) {
         if (offset + 64 > totalsize) { // mac帧单个最小必须是64个，小于这个的数据包一定不完整
             int32_t remainsize = totalsize - offset;
@@ -257,7 +257,7 @@ int readdata (struct FDCLIENT* fdclient) {
             sourceclient->remainsize = remainsize;
             break;
         }
-        int32_t packagesize = 256*buff[offset] + buff[offset+1] + 2; // 当前数据帧大小
+        int32_t packagesize = 256 * buff[offset] + buff[offset+1] + 2; // 当前数据帧大小
         if (offset + packagesize > totalsize) {
             int32_t remainsize = totalsize - offset;
             memcpy(sourceclient->remainpackage, buff + offset, remainsize);
@@ -295,7 +295,7 @@ int readdata (struct FDCLIENT* fdclient) {
             continue;
         }
         unsigned int dsthash = 256 * buff[offset+6] + buff[offset+7];
-        struct CLIENTLIST* targetclient;
+        struct CLIENTLIST *targetclient;
         for (targetclient = machashlist[dsthash] ; targetclient != NULL ; targetclient = targetclient->tail) {
             if (!memcmp(targetclient->mac, targetmac, 4)) {
                 break;
@@ -306,7 +306,7 @@ int readdata (struct FDCLIENT* fdclient) {
             offset += packagesize;
             continue;
         }
-        struct PACKAGELIST* package;
+        struct PACKAGELIST *package;
         if (remainpackagelisthead != NULL) { // 全局数据包回收站不为空
             package = remainpackagelisthead;
             remainpackagelisthead = remainpackagelisthead->tail;
@@ -333,7 +333,7 @@ int readdata (struct FDCLIENT* fdclient) {
             targetclient->packagelisttail->tail = package;
             targetclient->packagelisttail = targetclient->packagelisttail->tail;
         }
-        struct CLIENTLIST* tmpclient;
+        struct CLIENTLIST *tmpclient;
         for (tmpclient = writeclient ; tmpclient != NULL ; tmpclient = tmpclient->writetail) {
             if (tmpclient == targetclient) {
                 break;
@@ -370,7 +370,7 @@ int tap_alloc () {
         return -3;
     }
     printf("tap device name is %s, in %s, at %d\n", ifr.ifr_name, __FILE__, __LINE__);
-    struct CLIENTLIST* client;
+    struct CLIENTLIST *client;
     if (remainclientlisthead) {
         client = remainclientlisthead;
         remainclientlisthead = remainclientlisthead->tail;
@@ -423,7 +423,7 @@ int tap_alloc () {
     return 0;
 }
 
-int create_socketfd (unsigned int port) {
+int create_socketfd () {
     struct sockaddr_in sin;
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) {
@@ -433,9 +433,9 @@ int create_socketfd (unsigned int port) {
     memset(&sin, 0, sizeof(struct sockaddr_in));
     sin.sin_family = AF_INET; // ipv4
     sin.sin_addr.s_addr = INADDR_ANY; // 本机任意ip
-    sin.sin_port = htons(port);
+    sin.sin_port = htons(serverport);
     if (bind(fd, (struct sockaddr *)&sin, sizeof(sin)) < 0) {
-        printf("bind port %d fail, in %s, at %d\n", port, __FILE__, __LINE__);
+        printf("bind port %d fail, in %s, at %d\n", serverport, __FILE__, __LINE__);
         close(fd);
         return -2;
     }
@@ -554,7 +554,7 @@ int addclient (int serverfd) {
         return -13;
     }
     printf("new receive buffer is %d, socksval_len:%d, in %s, at %d\n", socksval, socksval_len,  __FILE__, __LINE__);
-    struct FDCLIENT* fdclient;
+    struct FDCLIENT *fdclient;
     if (remainfdclienthead != NULL) { // 有存货，直接拿出来用
         fdclient = remainfdclienthead;
         remainfdclienthead = remainfdclienthead->tail;
@@ -578,11 +578,11 @@ int addclient (int serverfd) {
     return 0;
 }
 
-int removeclient (struct FDCLIENT* fdclient) {
+int removeclient (struct FDCLIENT *fdclient) {
     struct epoll_event ev;
     epoll_ctl(epollfd, EPOLL_CTL_DEL, fdclient->fd, &ev);
     close(fdclient->fd);
-    struct CLIENTLIST* client = fdclient->client;
+    struct CLIENTLIST *client = fdclient->client;
     if (client) { // 已经注册成功
         if (client->mac[0] != 0x00 || client->mac[1] != 0x00 || client->mac[2] != 0x00 || client->mac[3] != 0x00 || client->mac[4] != 0x00 || client->mac[5] != 0x00) { // 已经学习完毕
             if (client->hashhead) {
@@ -594,7 +594,7 @@ int removeclient (struct FDCLIENT* fdclient) {
                 client->hashtail->hashhead = client->hashhead;
             }
         }
-        for (struct PACKAGELIST* package = client->packagelisthead ; package != NULL ; package = package->tail) {
+        for (struct PACKAGELIST *package = client->packagelisthead ; package != NULL ; package = package->tail) {
             package->tail = remainpackagelisthead;
             remainpackagelisthead = package;
         }
@@ -646,7 +646,7 @@ int main () {
         static int wait_count;
         wait_count = epoll_wait(epollfd, evs, MAX_EVENT, -1);
         for (int i = 0 ; i < wait_count ; i++) {
-            struct FDCLIENT* fdclient = evs[i].data.ptr;
+            struct FDCLIENT *fdclient = evs[i].data.ptr;
             uint32_t events = evs[i].events;
             if (events & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) { // 检测到数据异常
                 printf("connect lose, fd:%d, EPOLLERR:%d, EPOLLHUP:%d, EPOLLRDHUP:%d, in %s, at %d\n", fdclient->fd, events&EPOLLERR ? 1 : 0, events&EPOLLHUP ? 1 : 0, events&EPOLLRDHUP ? 1 : 0, __FILE__, __LINE__);

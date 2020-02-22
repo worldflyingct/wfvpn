@@ -23,23 +23,24 @@
 #define KEEPIDLE          60 // tcp完全没有数据传输的最长间隔为60s，操过60s就要发送询问数据包
 #define KEEPINTVL         5  // 如果询问失败，间隔多久再次发出询问数据包
 #define KEEPCNT           3  // 如果询问失败，间隔多久再次发出询问数据包
+#define RETRYINTERVAL     5  // 如果重要链接断掉了，重连间隔时间，单位秒
 
 struct PACKAGELIST {
     unsigned char data[MTU_SIZE + 18];
     int32_t size;
     struct PACKAGELIST *tail;
 };
-struct PACKAGELIST* remainpackagelisthead = NULL;
+struct PACKAGELIST *remainpackagelisthead = NULL;
 struct CLIENTLIST {
     int fd; // 与fdclient中的fd意义一样，只是为了方便使用而已
-    struct PACKAGELIST* packagelisthead; // 发给自己这个端口的数据包列表头部
-    struct PACKAGELIST* packagelisttail; // 发给自己这个端口的数据包列表尾部
+    struct PACKAGELIST *packagelisthead; // 发给自己这个端口的数据包列表头部
+    struct PACKAGELIST *packagelisttail; // 发给自己这个端口的数据包列表尾部
     unsigned char remainpackage[MTU_SIZE + 18]; // 自己接收到的数据出现数据不全，将不全的数据存在这里，等待新的数据将其补全
     int remainsize; // 不全的数据大小
     int canwrite;
 } tclient, sclient;
-struct CLIENTLIST* tapclient = &tclient;
-struct CLIENTLIST* socketclient = &sclient;
+struct CLIENTLIST *tapclient = &tclient;
+struct CLIENTLIST *socketclient = &sclient;
 int epollfd;
 
 int setnonblocking (int fd) {
@@ -55,22 +56,22 @@ int setnonblocking (int fd) {
     return 0;
 }
 
-int addtoepoll (struct CLIENTLIST* fdclient) {
+int addtoepoll (struct CLIENTLIST *fdclient) {
     struct epoll_event ev;
     ev.data.ptr = fdclient;
     ev.events = EPOLLIN | EPOLLERR | EPOLLHUP | EPOLLRDHUP; // 水平触发，保证所有数据都能读到
     return epoll_ctl(epollfd, EPOLL_CTL_ADD, fdclient->fd, &ev);
 }
 
-int modepoll (struct CLIENTLIST* client, int flags) {
+int modepoll (struct CLIENTLIST *client, int flags) {
     struct epoll_event ev;
     ev.data.ptr = client;
     ev.events = EPOLLIN | EPOLLERR | EPOLLHUP | EPOLLRDHUP | flags; // 水平触发，保证所有数据都能读到
     return epoll_ctl(epollfd, EPOLL_CTL_MOD, client->fd, &ev);
 }
 
-int writenode (struct CLIENTLIST* client) {
-    struct PACKAGELIST* package = client->packagelisthead;
+int writenode (struct CLIENTLIST *client) {
+    struct PACKAGELIST *package = client->packagelisthead;
     client->packagelisthead = NULL;
     while (package != NULL) {
         ssize_t len = write(client->fd, package->data, package->size);
@@ -100,7 +101,7 @@ int writenode (struct CLIENTLIST* client) {
             }
             client->canwrite = 1;
         }
-        struct PACKAGELIST* tmppackage = package;
+        struct PACKAGELIST *tmppackage = package;
         package = package->tail;
         tmppackage->tail = remainpackagelisthead;
         remainpackagelisthead = tmppackage;
@@ -108,13 +109,13 @@ int writenode (struct CLIENTLIST* client) {
     return 0;
 }
 
-int readdata (struct CLIENTLIST* client) {
+int readdata (struct CLIENTLIST *client) {
     static unsigned char readbuf[MAXDATASIZE]; // 这里使用static关键词是为了将数据存储与数据段，减小对栈空间的压力。
-    static unsigned char* readbuff = NULL; // 这里是用于存储全部的需要写入的数据buf，
+    static unsigned char *readbuff = NULL; // 这里是用于存储全部的需要写入的数据buf，
     static int32_t maxtotalsize = 0;
     ssize_t len;
     int fd = client->fd;
-    struct CLIENTLIST* targetclient;
+    struct CLIENTLIST *targetclient;
     if (client == tapclient) { // tap驱动，原始数据，需要自己额外添加数据包长度。
         len = read(fd, readbuf + 2, MAXDATASIZE); // 这里最大只可能是1518
         if (len <= 0) {
@@ -133,7 +134,7 @@ int readdata (struct CLIENTLIST* client) {
     }
     int32_t offset = 0;
     int32_t totalsize;
-    unsigned char* buff;
+    unsigned char *buff;
     if (client->remainsize > 0) {
         totalsize = client->remainsize + len;
         if (totalsize > maxtotalsize) {
@@ -155,7 +156,7 @@ int readdata (struct CLIENTLIST* client) {
         totalsize = len;
         buff = readbuf;
     }
-    struct CLIENTLIST* writeclient = NULL;
+    struct CLIENTLIST *writeclient = NULL;
     while (offset < totalsize) {
         if (offset + 64 > totalsize) { // mac帧单个最小必须是64个，小于这个的数据包一定不完整
             int32_t remainsize = totalsize - offset;
@@ -170,7 +171,7 @@ int readdata (struct CLIENTLIST* client) {
             client->remainsize = remainsize;
             break;
         }
-        struct PACKAGELIST* package;
+        struct PACKAGELIST *package;
         if (remainpackagelisthead != NULL) { // 全局数据包回收站不为空
             package = remainpackagelisthead;
             remainpackagelisthead = remainpackagelisthead->tail;
@@ -212,7 +213,7 @@ int tap_alloc () {
     struct ifreq ifr;
     memset(&ifr, 0, sizeof(ifr));
     ifr.ifr_flags = IFF_TAP | IFF_NO_PI;
-    if (ioctl(fd, TUNSETIFF, (void *) &ifr) < 0) {
+    if (ioctl(fd, TUNSETIFF, (void*) &ifr) < 0) {
         printf("ioctl tun node fail, in %s, at %d\n", __FILE__, __LINE__);
         close(fd);
         return -2;
@@ -235,7 +236,7 @@ int tap_alloc () {
     return 0;
 }
 
-int connect_socketfd (unsigned char* ip, unsigned int port) {
+int connect_socketfd (unsigned char *ip, unsigned int port) {
     struct sockaddr_in sin;
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) {
@@ -352,24 +353,24 @@ int connect_socketfd (unsigned char* ip, unsigned int port) {
     return 0;
 }
 
-int removeclient (struct CLIENTLIST* client) {
+int removeclient (struct CLIENTLIST *client) {
     struct epoll_event ev;
     epoll_ctl(epollfd, EPOLL_CTL_DEL, client->fd, &ev);
     close(client->fd);
-    for (struct PACKAGELIST* package = client->packagelisthead ; package != NULL ; package = package->tail) {
+    for (struct PACKAGELIST *package = client->packagelisthead ; package != NULL ; package = package->tail) {
         package->tail = remainpackagelisthead;
         remainpackagelisthead = package;
     }
     if (client == socketclient) { // 常规情况
         do {
-            sleep(2);
+            sleep(RETRYINTERVAL);
             printf("try connect tcp socket again, in %s, at %d\n", __FILE__, __LINE__);
         }
         while (connect_socketfd(serverip, serverport));
     } else { // 基本不可能情况
         do {
             printf("try connect tap driver again, in %s, at %d\n", __FILE__, __LINE__);
-            sleep(2);
+            sleep(RETRYINTERVAL);
         }
         while (tap_alloc());
     }
@@ -395,7 +396,7 @@ int main () {
         static int wait_count;
         wait_count = epoll_wait(epollfd, evs, MAX_EVENT, -1);
         for (int i = 0 ; i < wait_count ; i++) {
-            struct CLIENTLIST* client = evs[i].data.ptr;
+            struct CLIENTLIST *client = evs[i].data.ptr;
             uint32_t events = evs[i].events;
             if (events & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) { // 检测到数据异常
                 printf ("receive error event, fd:%d, EPOLLERR:%d, EPOLLHUP:%d, EPOLLRDHUP:%d, in %s, at %d\n", client->fd, events&EPOLLERR ? 1 : 0, events&EPOLLHUP ? 1 : 0, events&EPOLLRDHUP ? 1 : 0,  __FILE__, __LINE__);
