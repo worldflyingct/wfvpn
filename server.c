@@ -92,7 +92,12 @@ int writenode (struct CLIENTLIST *writeclient) {
         while (package != NULL) {
             ssize_t len = write(client->fd, package->data, package->size);
             if (len < package->size) { // 缓冲区不足，已无法继续写入数据。
-                if (len <= 0) {
+                if (len < 0) {
+                    if (client == fdtap->client) {
+                        perror("tap write error");
+                    } else {
+                        perror("socket write error");
+                    }
                     client->packagelisthead = package;
                     break;
                 }
@@ -175,6 +180,7 @@ int readdata (struct FDCLIENT *fdclient) {
     if (fdclient == fdtap) { // tap驱动，原始数据，需要自己额外添加数据包长度。
         len = read(fd, readbuf + 2, MAXDATASIZE); // 这里最大只可能是1518
         if (len <= 0) {
+            perror("tap read error");
             return -1;
         }
         readbuf[0] = len >> 8;
@@ -183,6 +189,7 @@ int readdata (struct FDCLIENT *fdclient) {
     } else { // 网络套接字。
         len = read(fd, readbuf, MAXDATASIZE);
         if (len <= 0) {
+            perror("socket read error");
             return -2;
         }
     }
