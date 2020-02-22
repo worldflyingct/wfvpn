@@ -88,8 +88,7 @@ int modepoll (struct FDCLIENT* fdclient, int flags) {
     return epoll_ctl(epollfd, EPOLL_CTL_MOD, fdclient->fd, &ev);
 }
 
-int writenode (struct FDCLIENT* fdclient) {
-    struct CLIENTLIST* client = fdclient->client;
+int writenode (struct CLIENTLIST* client) {
     static unsigned char* packages = NULL;
     static unsigned int maxtotalsize = 0;
     unsigned int totalsize = client->usefulsize + client->totalsize;
@@ -191,7 +190,7 @@ int braodcastdata (struct CLIENTLIST* sourceclient, unsigned char* buff, int32_t
         }
         client->totalsize += package->size;
         if (client->canwrite) { // 当前socket可写
-            writenode(client->fdclient);
+            writenode(client);
         }
     }
     return 0;
@@ -368,7 +367,7 @@ int readdata (struct FDCLIENT* fdclient) {
         }
         targetclient->totalsize += package->size;
         if (targetclient->canwrite) { // 当前socket可写
-            writenode(targetclient->fdclient);
+            writenode(targetclient);
         }
         offset += packagesize;
     }
@@ -690,7 +689,7 @@ int main () {
                     continue;
                 }
             } else if (events & EPOLLOUT) { // 数据可写
-                writenode(fdclient);
+                writenode(fdclient->client);
             } else {
                 printf("receive new event 0x%08x, in %s, at %d\n", events,  __FILE__, __LINE__);
             }
