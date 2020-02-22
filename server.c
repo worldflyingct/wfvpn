@@ -172,7 +172,7 @@ struct CLIENTLIST* braodcastdata (struct CLIENTLIST *sourceclient, unsigned char
 }
 
 int readdata (struct FDCLIENT *fdclient) {
-    static unsigned char readbuf[MAXDATASIZE]; // 这里使用static关键词是为了将数据存储与数据段，减小对栈空间的压力。
+    unsigned char readbuf[MAXDATASIZE]; // 这里使用static关键词是为了将数据存储与数据段，减小对栈空间的压力。
     static unsigned char *readbuff = NULL; // 这里是用于存储全部的需要写入的数据buf，
     static unsigned int maxtotalsize = 0;
     ssize_t len;
