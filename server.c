@@ -49,13 +49,14 @@ struct CLIENTLIST {
 struct CLIENTLIST *clientlisthead = NULL;
 struct CLIENTLIST *remainclientlisthead = NULL;
 struct CLIENTLIST *machashlist[65536]; // mac地址的hash表，用于快速找到对应的mac
+struct CLIENTLIST *tapclient;
 struct FDCLIENT {
     int fd;
     struct CLIENTLIST *client;
     struct FDCLIENT *tail; // 从remainclientlist中寻找下一个可用的clientlist
 };
 struct FDCLIENT *remainfdclienthead = NULL;
-struct FDCLIENT *fdtap, *fdserver;
+struct FDCLIENT *fdserver;
 int epollfd;
 
 int setnonblocking (int fd) {
@@ -93,7 +94,7 @@ int writenode (struct CLIENTLIST *writeclient) {
             ssize_t len = write(client->fd, package->data, package->size);
             if (len < package->size) { // 缓冲区不足，已无法继续写入数据。
                 if (len < 0) {
-                    if (client == fdtap->client) {
+                    if (client == tapclient) {
                         perror("tap write error");
                     } else {
                         perror("socket write error");
@@ -148,7 +149,7 @@ struct CLIENTLIST* braodcastdata (struct CLIENTLIST *sourceclient, unsigned char
                 continue;
             }
         }
-        if (client == fdtap->client) {
+        if (client == tapclient) {
             memcpy(package->data, buff + 2, packagesize - 2);
             package->size = packagesize - 2;
         } else {
@@ -177,7 +178,8 @@ int readdata (struct FDCLIENT *fdclient) {
     static unsigned int maxtotalsize = 0;
     ssize_t len;
     int fd = fdclient->fd;
-    if (fdclient == fdtap) { // tap驱动，原始数据，需要自己额外添加数据包长度。
+    struct CLIENTLIST *sourceclient = fdclient->client;
+    if (sourceclient == tapclient) { // tap驱动，原始数据，需要自己额外添加数据包长度。
         len = read(fd, readbuf + 2, MAXDATASIZE); // 这里最大只可能是1518
         if (len < 0) {
             perror("tap read error");
@@ -194,7 +196,6 @@ int readdata (struct FDCLIENT *fdclient) {
         }
     }
     int32_t offset = 0;
-    struct CLIENTLIST *sourceclient = fdclient->client;
     if (sourceclient == NULL) { // 用户没有找到
         if (readbuf[0] != 0x00 || readbuf[1] != 0x00 || readbuf[2] != 0x00) { // 前两个字节为0代表特殊命令，单独处理。第三个字节为0代表注册。
             printf("just can run login, in %s, at %d\n",  __FILE__, __LINE__);
@@ -325,7 +326,7 @@ int readdata (struct FDCLIENT *fdclient) {
                 continue;
             }
         }
-        if (targetclient == fdtap->client) {
+        if (targetclient == tapclient) {
             memcpy(package->data, buff + offset + 2, packagesize - 2);
             package->size = packagesize - 2;
         } else {
@@ -366,7 +367,7 @@ int tap_alloc () {
     struct ifreq ifr;
     memset(&ifr, 0, sizeof(ifr));
     ifr.ifr_flags = IFF_TAP | IFF_NO_PI;
-    if (ioctl(fd, TUNSETIFF, (void *) &ifr) < 0) {
+    if (ioctl(fd, TUNSETIFF, (void*) &ifr) < 0) {
         printf("ioctl tun node fail, in %s, at %d\n", __FILE__, __LINE__);
         close(fd);
         return -2;
@@ -377,53 +378,55 @@ int tap_alloc () {
         return -3;
     }
     printf("tap device name is %s, in %s, at %d\n", ifr.ifr_name, __FILE__, __LINE__);
-    struct CLIENTLIST *client;
     if (remainclientlisthead) {
-        client = remainclientlisthead;
+        tapclient = remainclientlisthead;
         remainclientlisthead = remainclientlisthead->tail;
     } else {
-        client = (struct CLIENTLIST*) malloc(sizeof(struct CLIENTLIST));
-        if (client == NULL) {
+        tapclient = (struct CLIENTLIST*) malloc(sizeof(struct CLIENTLIST));
+        if (tapclient == NULL) {
             printf("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
             close(fd);
             return -4;
         }
     }
-    client->fd = fd;
-    memset(client->mac, 0, 6);
-    client->packagelisthead = NULL;
-    client->remainsize = 0;
-    client->canwrite = 1;
-    client->hashhead = NULL;
-    client->hashtail = NULL;
-    client->head = NULL;
+    tapclient->fd = fd;
+    memset(tapclient->mac, 0, 6);
+    tapclient->packagelisthead = NULL;
+    tapclient->remainsize = 0;
+    tapclient->canwrite = 1;
+    tapclient->hashhead = NULL;
+    tapclient->hashtail = NULL;
+    tapclient->head = NULL;
     if (clientlisthead) {
-        clientlisthead->head = client;
+        clientlisthead->head = tapclient;
     }
-    client->tail = clientlisthead;
-    clientlisthead = client;
+    tapclient->tail = clientlisthead;
+    clientlisthead = tapclient;
+    struct FDCLIENT* fdclient;
     if (remainfdclienthead != NULL) { // 有存货，直接拿出来用
-        fdtap = remainfdclienthead;
+        fdclient = remainfdclienthead;
         remainfdclienthead = remainfdclienthead->tail;
     } else { // 没有存货，malloc一个
-        fdtap = (struct FDCLIENT*) malloc(sizeof(struct FDCLIENT));
-        if (fdtap == NULL) {
+        fdclient = (struct FDCLIENT*) malloc(sizeof(struct FDCLIENT));
+        if (fdclient == NULL) {
             printf("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
-            client->tail = remainclientlisthead;
-            remainclientlisthead = client;
+            clientlisthead = clientlisthead->tail;
+            tapclient->tail = remainclientlisthead;
+            remainclientlisthead = tapclient;
             close(fd);
             return -5;
         }
     }
-    client->fdclient = fdtap;
-    fdtap->fd = fd;
-    fdtap->client = client;
-    if (addtoepoll(fdtap)) {
+    tapclient->fdclient = fdclient;
+    fdclient->fd = fd;
+    fdclient->client = tapclient;
+    if (addtoepoll(fdclient)) {
         printf("tapfd add to epoll fail, in %s, at %d\n",  __FILE__, __LINE__);
-        fdtap->tail = remainfdclienthead;
-        remainfdclienthead = fdtap;
-        client->tail = remainclientlisthead;
-        remainclientlisthead = client;
+        fdclient->tail = remainfdclienthead;
+        remainfdclienthead = fdclient;
+        clientlisthead = clientlisthead->tail;
+        tapclient->tail = remainclientlisthead;
+        remainclientlisthead = tapclient;
         close(fd);
         return -6;
     }
@@ -441,7 +444,7 @@ int create_socketfd () {
     sin.sin_family = AF_INET; // ipv4
     sin.sin_addr.s_addr = INADDR_ANY; // 本机任意ip
     sin.sin_port = htons(serverport);
-    if (bind(fd, (struct sockaddr *)&sin, sizeof(sin)) < 0) {
+    if (bind(fd, (struct sockaddr*)&sin, sizeof(sin)) < 0) {
         printf("bind port %d fail, in %s, at %d\n", serverport, __FILE__, __LINE__);
         close(fd);
         return -2;
@@ -619,7 +622,7 @@ int removeclient (struct FDCLIENT *fdclient) {
     fdclient->tail = remainfdclienthead;
     remainfdclienthead = fdclient;
     printf("host %02x:%02x:%02x:%02x:%02x:%02x disconnect, in %s, at %d\n", client->mac[0], client->mac[1], client->mac[2], client->mac[3], client->mac[4], client->mac[5],  __FILE__, __LINE__);
-    if (fdclient == fdtap) { // 基本不可能情况
+    if (client == tapclient) { // 基本不可能情况
         do {
             printf("try connect tap driver again, in %s, at %d\n", __FILE__, __LINE__);
             sleep(RETRYINTERVAL);
