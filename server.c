@@ -27,7 +27,7 @@
 
 struct PACKAGELIST {
     unsigned char data[MTU_SIZE + 18];
-    int32_t size;
+    int size;
     struct PACKAGELIST *tail;
 };
 struct PACKAGELIST *remainpackagelisthead = NULL;
@@ -102,7 +102,7 @@ int writenode (struct CLIENTLIST *writeclient) {
                     client->packagelisthead = package;
                     break;
                 }
-                int32_t size = package->size - len;
+                int size = package->size - len;
                 unsigned char tmpdata[MTU_SIZE + 18];
                 memcpy(tmpdata, package->data + len, size);
                 memcpy(package->data, tmpdata, size);
@@ -176,9 +176,9 @@ int readdata (struct FDCLIENT *fdclient) {
     unsigned char readbuf[MAXDATASIZE]; // 这里使用static关键词是为了将数据存储与数据段，减小对栈空间的压力。
     static unsigned char *readbuff = NULL; // 这里是用于存储全部的需要写入的数据buf，
     static unsigned int maxtotalsize = 0;
-    ssize_t len;
     int fd = fdclient->fd;
     struct CLIENTLIST *sourceclient = fdclient->client;
+    ssize_t len;
     if (sourceclient == tapclient) { // tap驱动，原始数据，需要自己额外添加数据包长度。
         len = read(fd, readbuf + 2, MAXDATASIZE); // 这里最大只可能是1518
         if (len < 0) {
@@ -260,14 +260,14 @@ int readdata (struct FDCLIENT *fdclient) {
     struct CLIENTLIST *writeclient = NULL;
     while (offset < totalsize) {
         if (offset + 64 > totalsize) { // mac帧单个最小必须是64个，小于这个的数据包一定不完整
-            int32_t remainsize = totalsize - offset;
+            int remainsize = totalsize - offset;
             memcpy(sourceclient->remainpackage, buff + offset, remainsize);
             sourceclient->remainsize = remainsize;
             break;
         }
-        int32_t packagesize = 256 * buff[offset] + buff[offset+1] + 2; // 当前数据帧大小
+        int packagesize = 256 * buff[offset] + buff[offset+1] + 2; // 当前数据帧大小
         if (offset + packagesize > totalsize) {
-            int32_t remainsize = totalsize - offset;
+            int remainsize = totalsize - offset;
             memcpy(sourceclient->remainpackage, buff + offset, remainsize);
             sourceclient->remainsize = remainsize;
             break;
@@ -479,91 +479,91 @@ int create_socketfd () {
 int addclient (int serverfd) {
     struct sockaddr_in sin;
     socklen_t in_addr_len = sizeof(struct sockaddr_in);
-    int newfd = accept(serverfd, (struct sockaddr*)&sin, &in_addr_len);
-    printf("new socket:%d, in %s, at %d\n", newfd,  __FILE__, __LINE__);
-    if (newfd < 0) {
+    int fd = accept(serverfd, (struct sockaddr*)&sin, &in_addr_len);
+    printf("new socket:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
+    if (fd < 0) {
         printf("accept a new fd fail, in %s, at %d\n",  __FILE__, __LINE__);
         return -1;
     }
-    if (setnonblocking(newfd) < 0) { // 设置为非阻塞IO
-        printf("set nonblocking fail, fd:%d, in %s, at %d\n", newfd, __FILE__, __LINE__);
-        close(newfd);
+    if (setnonblocking(fd) < 0) { // 设置为非阻塞IO
+        printf("set nonblocking fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
+        close(fd);
         return -2;
     }
     unsigned int socksval = 1;
-    if (setsockopt(newfd, IPPROTO_TCP, TCP_NODELAY, (unsigned char*)&socksval, sizeof(socksval))) { // 关闭Nagle协议
-        printf("close Nagle protocol fail, fd:%d, in %s, at %d\n", newfd, __FILE__, __LINE__);
-        close(newfd);
+    if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (unsigned char*)&socksval, sizeof(socksval))) { // 关闭Nagle协议
+        printf("close Nagle protocol fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
+        close(fd);
         return -3;
     }
 #ifdef KEEPALIVE
     socksval = 1;
-    if (setsockopt(newfd, SOL_SOCKET, SO_KEEPALIVE, (unsigned char*)&socksval, sizeof(socksval))) { // 启动tcp心跳包
-        printf("set socket keepalive fail, fd:%d, in %s, at %d\n", newfd, __FILE__, __LINE__);
-        close(newfd);
+    if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, (unsigned char*)&socksval, sizeof(socksval))) { // 启动tcp心跳包
+        printf("set socket keepalive fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
+        close(fd);
         return -4;
     }
     socksval = KEEPIDLE;
-    if (setsockopt(newfd, IPPROTO_TCP, TCP_KEEPIDLE, (unsigned char*)&socksval, sizeof(socksval))) { // 设置tcp心跳包参数
-        printf("set socket keepidle fail, fd:%d, in %s, at %d\n", newfd, __FILE__, __LINE__);
-        close(newfd);
+    if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, (unsigned char*)&socksval, sizeof(socksval))) { // 设置tcp心跳包参数
+        printf("set socket keepidle fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
+        close(fd);
         return -5;
     }
     socksval = KEEPINTVL;
-    if (setsockopt(newfd, IPPROTO_TCP, TCP_KEEPINTVL, (unsigned char*)&socksval, sizeof(socksval))) { // 设置tcp心跳包参数
-        printf("set socket keepintvl fail, fd:%d, in %s, at %d\n", newfd, __FILE__, __LINE__);
-        close(newfd);
+    if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, (unsigned char*)&socksval, sizeof(socksval))) { // 设置tcp心跳包参数
+        printf("set socket keepintvl fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
+        close(fd);
         return -6;
     }
     socksval = KEEPCNT;
-    if (setsockopt(newfd, IPPROTO_TCP, TCP_KEEPCNT, (unsigned char*)&socksval, sizeof(socksval))) { // 设置tcp心跳包参数
-        printf("set socket keepcnt fail, fd:%d, in %s, at %d\n", newfd, __FILE__, __LINE__);
-        close(newfd);
+    if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, (unsigned char*)&socksval, sizeof(socksval))) { // 设置tcp心跳包参数
+        printf("set socket keepcnt fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
+        close(fd);
         return -7;
     }
 #endif
     // 修改发送缓冲区大小
     socklen_t socksval_len = sizeof(socksval);
-    if (getsockopt(newfd, SOL_SOCKET, SO_SNDBUF, (unsigned char*)&socksval, &socksval_len)) {
-        printf("get send buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
-        close(newfd);
+    if (getsockopt(fd, SOL_SOCKET, SO_SNDBUF, (unsigned char*)&socksval, &socksval_len)) {
+        printf("get send buffer fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
+        close(fd);
         return -8;
     }
-    printf("old send buffer is %d, socksval_len:%d, in %s, at %d\n", socksval, socksval_len,  __FILE__, __LINE__);
+    printf("old send buffer is %d, socksval_len:%d, fd:%d, in %s, at %d\n", socksval, socksval_len, fd,  __FILE__, __LINE__);
     socksval = MAXDATASIZE;
-    if (setsockopt(newfd, SOL_SOCKET, SO_SNDBUF, (unsigned char*)&socksval, sizeof (socksval))) {
-        printf("set send buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
-        close(newfd);
+    if (setsockopt(fd, SOL_SOCKET, SO_SNDBUF, (unsigned char*)&socksval, sizeof (socksval))) {
+        printf("set send buffer fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
+        close(fd);
         return -9;
     }
     socksval_len = sizeof(socksval);
-    if (getsockopt(newfd, SOL_SOCKET, SO_SNDBUF, (unsigned char*)&socksval, &socksval_len)) {
-        printf("get send buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
-        close(newfd);
+    if (getsockopt(fd, SOL_SOCKET, SO_SNDBUF, (unsigned char*)&socksval, &socksval_len)) {
+        printf("get send buffer fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
+        close(fd);
         return -10;
     }
-    printf("new send buffer is %d, socksval_len:%d, in %s, at %d\n", socksval, socksval_len,  __FILE__, __LINE__);
+    printf("new send buffer is %d, socksval_len:%d, fd:%d, in %s, at %d\n", socksval, socksval_len, fd,  __FILE__, __LINE__);
     // 修改接收缓冲区大小
     socksval_len = sizeof(socksval);
-    if (getsockopt(newfd, SOL_SOCKET, SO_RCVBUF, (unsigned char*)&socksval, &socksval_len)) {
-        printf("get receive buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
-        close(newfd);
+    if (getsockopt(fd, SOL_SOCKET, SO_RCVBUF, (unsigned char*)&socksval, &socksval_len)) {
+        printf("get receive buffer fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
+        close(fd);
         return -11;
     }
-    printf("old receive buffer is %d, socksval_len:%d, in %s, at %d\n", socksval, socksval_len,  __FILE__, __LINE__);
+    printf("old receive buffer is %d, socksval_len:%d, fd:%d, in %s, at %d\n", socksval, socksval_len, fd,  __FILE__, __LINE__);
     socksval = MAXDATASIZE;
-    if (setsockopt(newfd, SOL_SOCKET, SO_RCVBUF, (char*)&socksval, sizeof(socksval))) {
-        printf("set receive buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
-        close(newfd);
+    if (setsockopt(fd, SOL_SOCKET, SO_RCVBUF, (char*)&socksval, sizeof(socksval))) {
+        printf("set receive buffer fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
+        close(fd);
         return -12;
     }
     socksval_len = sizeof(socksval);
-    if (getsockopt(newfd, SOL_SOCKET, SO_RCVBUF, (unsigned char*)&socksval, &socksval_len)) {
-        printf("get receive buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
-        close(newfd);
+    if (getsockopt(fd, SOL_SOCKET, SO_RCVBUF, (unsigned char*)&socksval, &socksval_len)) {
+        printf("get receive buffer fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
+        close(fd);
         return -13;
     }
-    printf("new receive buffer is %d, socksval_len:%d, in %s, at %d\n", socksval, socksval_len,  __FILE__, __LINE__);
+    printf("new receive buffer is %d, socksval_len:%d, fd:%d, in %s, at %d\n", socksval, socksval_len, fd,  __FILE__, __LINE__);
     struct FDCLIENT *fdclient;
     if (remainfdclienthead != NULL) { // 有存货，直接拿出来用
         fdclient = remainfdclienthead;
@@ -571,18 +571,18 @@ int addclient (int serverfd) {
     } else { // 没有存货，malloc一个
         fdclient = (struct FDCLIENT*) malloc(sizeof(struct FDCLIENT));
         if (fdclient == NULL) {
-            printf("malloc new fdclient object fail, in %s, at %d\n",  __FILE__, __LINE__);
-            close(newfd);
+            printf("malloc new fdclient object fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
+            close(fd);
             return -14;
         }
     }
-    fdclient->fd = newfd;
+    fdclient->fd = fd;
     fdclient->client = NULL;
     if (addtoepoll(fdclient)) {
-        printf("add to epoll fail, in %s, at %d\n",  __FILE__, __LINE__);
+        printf("add to epoll fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         fdclient->tail = remainfdclienthead;
         remainfdclienthead = fdclient;
-        close(newfd);
+        close(fd);
         return -15;
     }
     return 0;

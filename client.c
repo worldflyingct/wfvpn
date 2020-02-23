@@ -27,7 +27,7 @@
 
 struct PACKAGELIST {
     unsigned char data[MTU_SIZE + 18];
-    int32_t size;
+    int size;
     struct PACKAGELIST *tail;
 };
 struct PACKAGELIST *remainpackagelisthead = NULL;
@@ -85,7 +85,7 @@ int writenode (struct CLIENTLIST *client) {
                 client->packagelisthead = package;
                 break;
             }
-            int32_t size = package->size - len;
+            int size = package->size - len;
             unsigned char tmpdata[MTU_SIZE + 18];
             memcpy(tmpdata, package->data + len, size);
             memcpy(package->data, tmpdata, size);
@@ -118,9 +118,9 @@ int readdata (struct CLIENTLIST *client) {
     unsigned char readbuf[MAXDATASIZE]; // 这里使用static关键词是为了将数据存储与数据段，减小对栈空间的压力。
     static unsigned char *readbuff = NULL; // 这里是用于存储全部的需要写入的数据buf，
     static int32_t maxtotalsize = 0;
-    ssize_t len;
     int fd = client->fd;
     struct CLIENTLIST *targetclient;
+    ssize_t len;
     if (client == tapclient) { // tap驱动，原始数据，需要自己额外添加数据包长度。
         len = read(fd, readbuf + 2, MAXDATASIZE); // 这里最大只可能是1518
         if (len < 0) {
@@ -166,14 +166,14 @@ int readdata (struct CLIENTLIST *client) {
     struct CLIENTLIST *writeclient = NULL;
     while (offset < totalsize) {
         if (offset + 64 > totalsize) { // mac帧单个最小必须是64个，小于这个的数据包一定不完整
-            int32_t remainsize = totalsize - offset;
+            int remainsize = totalsize - offset;
             memcpy(client->remainpackage, buff + offset, remainsize);
             client->remainsize = remainsize;
             break;
         }
-        int32_t packagesize = 256*buff[offset] + buff[offset+1] + 2; // 当前数据帧大小
+        int packagesize = 256*buff[offset] + buff[offset+1] + 2; // 当前数据帧大小
         if (offset + packagesize > totalsize) {
-            int32_t remainsize = totalsize - offset;
+            int remainsize = totalsize - offset;
             memcpy(client->remainpackage, buff + offset, remainsize);
             client->remainsize = remainsize;
             break;
@@ -256,7 +256,7 @@ int connect_socketfd (unsigned char *ip, unsigned int port) {
     sin.sin_family = AF_INET; // ipv4
     in_addr_t _ip = inet_addr(ip); // 服务器ip地址，这里不能输入域名
     if (_ip == INADDR_NONE) {
-        printf("server ip error, in %s, at %d\n", __FILE__, __LINE__);
+        printf("server ip error, ip:%s, in %s, at %d\n", ip, __FILE__, __LINE__);
         close(fd);
         return -2;
     }
@@ -311,51 +311,51 @@ int connect_socketfd (unsigned char *ip, unsigned int port) {
     // 修改发送缓冲区大小
     socklen_t socksval_len = sizeof(socksval);
     if (getsockopt(fd, SOL_SOCKET, SO_SNDBUF, (unsigned char*)&socksval, &socksval_len)) {
-        printf("get send buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
+        printf("get send buffer fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         close(fd);
         return -10;
     }
-    printf("old send buffer is %d, socksval_len:%d, in %s, at %d\n", socksval, socksval_len,  __FILE__, __LINE__);
+    printf("old send buffer is %d, socksval_len:%d, fd:%d, in %s, at %d\n", socksval, socksval_len, fd,  __FILE__, __LINE__);
     socksval = MAXDATASIZE - MTU_SIZE;
     if (setsockopt(fd, SOL_SOCKET, SO_SNDBUF, (unsigned char*)&socksval, sizeof(socksval))) {
-        printf("set send buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
+        printf("set send buffer fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         close(fd);
         return -11;
     }
     socksval_len = sizeof(socksval);
     if (getsockopt(fd, SOL_SOCKET, SO_SNDBUF, (unsigned char*)&socksval, &socksval_len)) {
-        printf("get send buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
+        printf("get send buffer fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         close(fd);
         return -12;
     }
-    printf("new send buffer is %d, socksval_len:%d, in %s, at %d\n", socksval, socksval_len,  __FILE__, __LINE__);
+    printf("new send buffer is %d, socksval_len:%d, fd:%d, in %s, at %d\n", socksval, socksval_len, fd,  __FILE__, __LINE__);
     // 修改接收缓冲区大小
     socksval_len = sizeof(socksval);
     if (getsockopt(fd, SOL_SOCKET, SO_RCVBUF, (unsigned char*)&socksval, &socksval_len)) {
-        printf("get receive buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
+        printf("get receive buffer fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         close(fd);
         return -13;
     }
-    printf("old receive buffer is %d, len:%d, in %s, at %d\n", socksval, socksval_len,  __FILE__, __LINE__);
+    printf("old receive buffer is %d, len:%d, fd:%d, in %s, at %d\n", socksval, socksval_len, fd,  __FILE__, __LINE__);
     socksval = MAXDATASIZE - MTU_SIZE;
     if (setsockopt(fd, SOL_SOCKET, SO_RCVBUF, (unsigned char*)&socksval, sizeof(socksval))) {
-        printf("set receive buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
+        printf("set receive buffer fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         close(fd);
         return -14;
     }
     socksval_len = sizeof(socksval);
     if (getsockopt(fd, SOL_SOCKET, SO_RCVBUF, (unsigned char*)&socksval, &socksval_len)) {
-        printf("get receive buffer fail, in %s, at %d\n",  __FILE__, __LINE__);
+        printf("get receive buffer fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         close(fd);
         return -15;
     }
-    printf("new receive buffer is %d, socksval_len:%d, in %s, at %d\n", socksval, socksval_len,  __FILE__, __LINE__);
+    printf("new receive buffer is %d, socksval_len:%d, fd:%d, in %s, at %d\n", socksval, socksval_len, fd,  __FILE__, __LINE__);
     socketclient->fd = fd;
     socketclient->packagelisthead = NULL;
     socketclient->remainsize = 0;
     socketclient->canwrite = 1;
     if (addtoepoll(socketclient)) {
-        printf("tunfd addtoepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
+        printf("tapfd addtoepoll fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         close(fd);
         return -16;
     }
