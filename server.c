@@ -321,8 +321,8 @@ int readdata (struct FDCLIENT *fdclient) {
         } else {
             package = (struct PACKAGELIST*) malloc(sizeof(struct PACKAGELIST));
             if (package == NULL) {
-                offset += packagesize;
                 printf("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
+                offset += packagesize;
                 continue;
             }
         }
@@ -341,13 +341,17 @@ int readdata (struct FDCLIENT *fdclient) {
             targetclient->packagelisttail->tail = package;
             targetclient->packagelisttail = targetclient->packagelisttail->tail;
         }
+        if (!targetclient->canwrite) {
+            offset += packagesize;
+            continue;
+        }
         struct CLIENTLIST *tmpclient;
         for (tmpclient = writeclient ; tmpclient != NULL ; tmpclient = tmpclient->writetail) {
             if (tmpclient == targetclient) {
                 break;
             }
         }
-        if (tmpclient == NULL && targetclient->canwrite) {
+        if (tmpclient == NULL) {
             targetclient->writetail = writeclient;
             writeclient = targetclient;
         }
