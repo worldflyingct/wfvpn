@@ -15,6 +15,8 @@
 #include <arpa/inet.h>
 #include <netinet/tcp.h>
 #include <sys/epoll.h>
+// 用于生成随机种子
+#include <time.h>
 
 #define MAXDATASIZE       2*1024*1024
 #define MAX_EVENT         1024
@@ -38,6 +40,7 @@ struct CLIENTLIST {
     unsigned char remainpackage[MTU_SIZE + 18]; // 自己接收到的数据出现数据不全，将不全的数据存在这里，等待新的数据将其补全
     int remainsize; // 不全的数据大小
     int canwrite;
+    unsigned char xormix;
 } tclient, sclient;
 struct CLIENTLIST *tapclient = &tclient;
 struct CLIENTLIST *socketclient = &sclient;
@@ -237,6 +240,7 @@ int tap_alloc () {
     tapclient->packagelisthead = NULL;
     tapclient->remainsize = 0;
     tapclient->canwrite = 1;
+    tapclient->xormix = 0;
     if (addtoepoll(tapclient)) {
         printf("clientfd addtoepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
         close(fd);
@@ -267,9 +271,10 @@ int connect_socketfd (unsigned char *ip, unsigned int port) {
         close(fd);
         return -3;
     }
-    unsigned char data[3+sizeof(password)-1];
+    unsigned char data[4+sizeof(password)-1];
     memset(data, 0, 3);
-    memcpy(data + 3, password, sizeof(password)-1);
+    data[3] = time(NULL) & 0xff;
+    memcpy(data + 4, password, sizeof(password)-1);
     write(fd, data, sizeof(data));
     if (setnonblocking(fd) < 0) { // 设置为非阻塞IO
         printf("set nonblocking fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
@@ -354,6 +359,7 @@ int connect_socketfd (unsigned char *ip, unsigned int port) {
     socketclient->packagelisthead = NULL;
     socketclient->remainsize = 0;
     socketclient->canwrite = 1;
+    socketclient->xormix = data[3];
     if (addtoepoll(socketclient)) {
         printf("tapfd addtoepoll fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         close(fd);

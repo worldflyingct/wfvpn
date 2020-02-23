@@ -40,6 +40,7 @@ struct CLIENTLIST {
     unsigned char remainpackage[MTU_SIZE + 18]; // 自己接收到的数据出现数据不全，将不全的数据存在这里，等待新的数据将其补全
     int remainsize; // 不全的数据大小
     int canwrite;
+    unsigned char xormix;
     struct CLIENTLIST *hashhead; // 从哈希表中寻找上一个clientlist
     struct CLIENTLIST *hashtail; // 从哈希表中寻找下一个clientlist
     struct CLIENTLIST *head; // 从remainclientlist中寻找下一个可用的clientlist
@@ -201,7 +202,7 @@ int readdata (struct FDCLIENT *fdclient) {
             printf("just can run login, in %s, at %d\n",  __FILE__, __LINE__);
             return -3;
         }
-        if (memcmp(readbuf + 3, password, sizeof(password)-1)) { // 绑定密码错误
+        if (memcmp(readbuf + 4, password, sizeof(password)-1)) { // 绑定密码错误
             printf("password check fail, in %s, at %d\n",  __FILE__, __LINE__);
             return -4;
         }
@@ -221,6 +222,7 @@ int readdata (struct FDCLIENT *fdclient) {
         sourceclient->packagelisthead = NULL;
         sourceclient->remainsize = 0;
         sourceclient->canwrite = 1;
+        sourceclient->xormix = readbuf[3];
         sourceclient->hashhead = NULL;
         sourceclient->hashtail = NULL;
         sourceclient->head = NULL;
@@ -230,7 +232,7 @@ int readdata (struct FDCLIENT *fdclient) {
         sourceclient->tail = clientlisthead;
         clientlisthead = sourceclient;
         fdclient->client = sourceclient;
-        offset += 3 + sizeof(password) - 1; // 绑定包长度
+        offset += 4 + sizeof(password) - 1; // 绑定包长度
         printf("add client success, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
     }
     int32_t totalsize;
@@ -398,6 +400,7 @@ int tap_alloc () {
     tapclient->packagelisthead = NULL;
     tapclient->remainsize = 0;
     tapclient->canwrite = 1;
+    tapclient->xormix = 0;
     tapclient->hashhead = NULL;
     tapclient->hashtail = NULL;
     tapclient->head = NULL;
