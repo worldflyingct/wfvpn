@@ -141,6 +141,10 @@ int readdata (struct CLIENTLIST *client) {
             return -2;
         }
         targetclient = tapclient;
+        unsigned char xormix = client->xormix;
+        for (uint32_t i = 0 ; i < len ; i++) {
+            readbuf[i] ^= xormix;
+        }
     }
     int32_t offset = 0;
     int32_t totalsize;
@@ -196,6 +200,11 @@ int readdata (struct CLIENTLIST *client) {
         if (client == tapclient) {
             memcpy(package->data, buff + offset, packagesize);
             package->size = packagesize;
+            unsigned char *data = package->data;
+            unsigned char xormix = targetclient->xormix;
+            for (uint32_t i = 0 ; i < packagesize ; i++) {
+                data[i] ^= xormix;
+            }
         } else {
             memcpy(package->data, buff + offset + 2, packagesize);
             package->size = packagesize - 2;

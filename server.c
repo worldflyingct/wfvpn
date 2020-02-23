@@ -156,6 +156,11 @@ struct CLIENTLIST* braodcastdata (struct CLIENTLIST *sourceclient, unsigned char
         } else {
             memcpy(package->data, buff, packagesize);
             package->size = packagesize;
+            unsigned char *data = package->data;
+            unsigned char xormix = client->xormix;
+            for (uint32_t i = 0 ; i < packagesize ; i++) {
+                data[i] ^= xormix;
+            }
         }
         package->tail = NULL;
         if (client->packagelisthead == NULL) {
@@ -195,6 +200,12 @@ int readdata (struct FDCLIENT *fdclient) {
             perror("socket read error");
             return -2;
         }
+        if (sourceclient) {
+            unsigned char xormix = sourceclient->xormix;
+            for (uint32_t i = 0 ; i < len ; i++) {
+                readbuf[i] ^= xormix;
+            }
+        }
     }
     int32_t offset = 0;
     if (sourceclient == NULL) { // 用户没有找到
@@ -216,13 +227,14 @@ int readdata (struct FDCLIENT *fdclient) {
                 return -5;
             }
         }
+        unsigned char xormix = readbuf[3];
         sourceclient->fd = fd;
         memset(sourceclient->mac, 0, 6);
         sourceclient->fdclient = fdclient;
         sourceclient->packagelisthead = NULL;
         sourceclient->remainsize = 0;
         sourceclient->canwrite = 1;
-        sourceclient->xormix = readbuf[3];
+        sourceclient->xormix = xormix;
         sourceclient->hashhead = NULL;
         sourceclient->hashtail = NULL;
         sourceclient->head = NULL;
@@ -234,6 +246,9 @@ int readdata (struct FDCLIENT *fdclient) {
         fdclient->client = sourceclient;
         offset += 4 + sizeof(password) - 1; // 绑定包长度
         printf("add client success, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
+        for (uint32_t i = offset ; i < len ; i++) {
+            readbuf[i] ^= xormix;
+        }
     }
     int32_t totalsize;
     unsigned char *buff;
@@ -334,6 +349,11 @@ int readdata (struct FDCLIENT *fdclient) {
         } else {
             memcpy(package->data, buff + offset, packagesize);
             package->size = packagesize;
+            unsigned char *data = package->data;
+            unsigned char xormix = targetclient->xormix;
+            for (uint32_t i = 0 ; i < packagesize ; i++) {
+                data[i] ^= xormix;
+            }
         }
         package->tail = NULL;
         if (targetclient->packagelisthead == NULL) {
