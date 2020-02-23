@@ -628,8 +628,8 @@ int removeclient (struct FDCLIENT *fdclient) {
     printf("host %02x:%02x:%02x:%02x:%02x:%02x disconnect, in %s, at %d\n", client->mac[0], client->mac[1], client->mac[2], client->mac[3], client->mac[4], client->mac[5],  __FILE__, __LINE__);
     if (client == tapclient) { // 基本不可能情况
         do {
-            printf("try connect tap driver again, in %s, at %d\n", __FILE__, __LINE__);
             sleep(RETRYINTERVAL);
+            printf("try connect tap driver again, in %s, at %d\n", __FILE__, __LINE__);
         }
         while(tap_alloc());
     }
