@@ -117,14 +117,14 @@ int writenode (struct CLIENTLIST *client) {
     return 0;
 }
 
-int readdata (struct CLIENTLIST *client) {
+int readdata (struct CLIENTLIST *sourceclient) {
     unsigned char readbuf[MAXDATASIZE]; // 这里使用static关键词是为了将数据存储与数据段，减小对栈空间的压力。
     static unsigned char *readbuff = NULL; // 这里是用于存储全部的需要写入的数据buf，
     static int32_t maxtotalsize = 0;
-    int fd = client->fd;
+    int fd = sourceclient->fd;
     struct CLIENTLIST *targetclient;
     ssize_t len;
-    if (client == tapclient) { // tap驱动，原始数据，需要自己额外添加数据包长度。
+    if (sourceclient == tapclient) { // tap驱动，原始数据，需要自己额外添加数据包长度。
         len = read(fd, readbuf + 2, MAXDATASIZE); // 这里最大只可能是1518
         if (len < 0) {
             perror("tap read error");
@@ -141,7 +141,7 @@ int readdata (struct CLIENTLIST *client) {
             return -2;
         }
         targetclient = tapclient;
-        unsigned char xormix = client->xormix;
+        unsigned char xormix = sourceclient->xormix;
         for (uint32_t i = 0 ; i < len ; i++) {
             readbuf[i] ^= xormix;
         }
@@ -149,8 +149,8 @@ int readdata (struct CLIENTLIST *client) {
     int32_t offset = 0;
     int32_t totalsize;
     unsigned char *buff;
-    if (client->remainsize > 0) {
-        totalsize = client->remainsize + len;
+    if (sourceclient->remainsize > 0) {
+        totalsize = sourceclient->remainsize + len;
         if (totalsize > maxtotalsize) {
             maxtotalsize = totalsize;
             if (readbuff != NULL) {
@@ -162,9 +162,9 @@ int readdata (struct CLIENTLIST *client) {
                 return -3;
             }
         }
-        memcpy(readbuff, client->remainpackage, client->remainsize);
-        memcpy(readbuff + client->remainsize, readbuf, len);
-        client->remainsize = 0;
+        memcpy(readbuff, sourceclient->remainpackage, sourceclient->remainsize);
+        memcpy(readbuff + sourceclient->remainsize, readbuf, len);
+        sourceclient->remainsize = 0;
         buff = readbuff;
     } else {
         totalsize = len;
@@ -174,15 +174,15 @@ int readdata (struct CLIENTLIST *client) {
     while (offset < totalsize) {
         if (offset + 64 > totalsize) { // mac帧单个最小必须是64个，小于这个的数据包一定不完整
             int remainsize = totalsize - offset;
-            memcpy(client->remainpackage, buff + offset, remainsize);
-            client->remainsize = remainsize;
+            memcpy(sourceclient->remainpackage, buff + offset, remainsize);
+            sourceclient->remainsize = remainsize;
             break;
         }
         int packagesize = 256*buff[offset] + buff[offset+1] + 2; // 当前数据帧大小
         if (offset + packagesize > totalsize) {
             int remainsize = totalsize - offset;
-            memcpy(client->remainpackage, buff + offset, remainsize);
-            client->remainsize = remainsize;
+            memcpy(sourceclient->remainpackage, buff + offset, remainsize);
+            sourceclient->remainsize = remainsize;
             break;
         }
         struct PACKAGELIST *package;
@@ -197,7 +197,10 @@ int readdata (struct CLIENTLIST *client) {
                 continue;
             }
         }
-        if (client == tapclient) {
+        if (targetclient == tapclient) {
+            memcpy(package->data, buff + offset + 2, packagesize);
+            package->size = packagesize - 2;
+        } else {
             memcpy(package->data, buff + offset, packagesize);
             package->size = packagesize;
             unsigned char *data = package->data;
@@ -205,9 +208,6 @@ int readdata (struct CLIENTLIST *client) {
             for (uint32_t i = 0 ; i < packagesize ; i++) {
                 data[i] ^= xormix;
             }
-        } else {
-            memcpy(package->data, buff + offset + 2, packagesize);
-            package->size = packagesize - 2;
         }
         package->tail = NULL;
         if (targetclient->packagelisthead == NULL) {

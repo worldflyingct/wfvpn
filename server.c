@@ -135,8 +135,8 @@ int writenode (struct CLIENTLIST *writeclient) {
 
 struct CLIENTLIST* braodcastdata (struct CLIENTLIST *sourceclient, unsigned char *buff, int32_t packagesize) {
     struct CLIENTLIST *writeclient = NULL;
-    for (struct CLIENTLIST *client = clientlisthead ; client != NULL ; client = client->tail) {
-        if (client == sourceclient) {
+    for (struct CLIENTLIST *targetclient = clientlisthead ; targetclient != NULL ; targetclient = targetclient->tail) {
+        if (targetclient == sourceclient) {
             continue;
         }
         struct PACKAGELIST *package;
@@ -150,29 +150,29 @@ struct CLIENTLIST* braodcastdata (struct CLIENTLIST *sourceclient, unsigned char
                 continue;
             }
         }
-        if (client == tapclient) {
+        if (targetclient == tapclient) {
             memcpy(package->data, buff + 2, packagesize - 2);
             package->size = packagesize - 2;
         } else {
             memcpy(package->data, buff, packagesize);
             package->size = packagesize;
             unsigned char *data = package->data;
-            unsigned char xormix = client->xormix;
+            unsigned char xormix = targetclient->xormix;
             for (uint32_t i = 0 ; i < packagesize ; i++) {
                 data[i] ^= xormix;
             }
         }
         package->tail = NULL;
-        if (client->packagelisthead == NULL) {
-            client->packagelisthead = package;
-            client->packagelisttail = client->packagelisthead;
+        if (targetclient->packagelisthead == NULL) {
+            targetclient->packagelisthead = package;
+            targetclient->packagelisttail = targetclient->packagelisthead;
         } else {
-            client->packagelisttail->tail = package;
-            client->packagelisttail = client->packagelisttail->tail;
+            targetclient->packagelisttail->tail = package;
+            targetclient->packagelisttail = targetclient->packagelisttail->tail;
         }
-        if (client->canwrite) {
-            client->writetail = writeclient;
-            writeclient = client;
+        if (targetclient->canwrite) {
+            targetclient->writetail = writeclient;
+            writeclient = targetclient;
         }
     }
     return writeclient;
