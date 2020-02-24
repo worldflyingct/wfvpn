@@ -40,7 +40,12 @@ struct CLIENTLIST {
     unsigned char remainpackage[MTU_SIZE + 18]; // 自己接收到的数据出现数据不全，将不全的数据存在这里，等待新的数据将其补全
     int remainsize; // 不全的数据大小
     int canwrite;
-    unsigned char xormix;
+    unsigned char sendcrypt;
+    unsigned char sendk;
+    unsigned char sendb;
+    unsigned char receivecrypt;
+    unsigned char receivek;
+    unsigned char receiveb;
     struct CLIENTLIST *hashhead; // 从哈希表中寻找上一个clientlist
     struct CLIENTLIST *hashtail; // 从哈希表中寻找下一个clientlist
     struct CLIENTLIST *head; // 从remainclientlist中寻找下一个可用的clientlist
@@ -85,6 +90,70 @@ int modepoll (struct FDCLIENT *fdclient, int flags) {
     ev.data.ptr = fdclient;
     ev.events = EPOLLIN | EPOLLERR | EPOLLHUP | EPOLLRDHUP | flags; // 水平触发，保证所有数据都能读到
     return epoll_ctl(epollfd, EPOLL_CTL_MOD, fdclient->fd, &ev);
+}
+
+void encrypt (struct CLIENTLIST *targetclient, unsigned char *data, unsigned int len) {
+    unsigned char sendcrypt = targetclient->sendcrypt;
+    unsigned char sendk = targetclient->sendk;
+    unsigned char sendb = targetclient->sendb;
+    switch (sendcrypt) {
+        case 0:
+            for (unsigned int i = 0 ; i < len ; i++) {
+                data[i] = data[i] ^ sendk;
+                data[i] = data[i] + sendb;
+            }
+            break;
+        case 1:
+            for (unsigned int i = 0 ; i < len ; i++) {
+                data[i] = data[i] ^ sendk;
+                data[i] = data[i] - sendb;
+            }
+            break;
+        case 2:
+            for (unsigned int i = 0 ; i < len ; i++) {
+                data[i] = data[i] + sendb;
+                data[i] = data[i] ^ sendk;
+            }
+            break;
+        case 3:
+            for (unsigned int i = 0 ; i < len ; i++) {
+                data[i] = data[i] - sendb;
+                data[i] = data[i] ^ sendk;
+            }
+            break;
+    }
+}
+
+void decrypt (struct CLIENTLIST *sourceclient, unsigned char *data, uint32_t len) {
+    unsigned char receivecrypt = sourceclient->receivecrypt;
+    unsigned char receivek = sourceclient->receivek;
+    unsigned char receiveb = sourceclient->receiveb;
+    switch (receivecrypt) {
+        case 0:
+            for (uint32_t i = 0 ; i < len ; i++) {
+                data[i] = data[i] - receiveb;
+                data[i] = data[i] ^ receivek;
+            }
+            break;
+        case 1:
+            for (uint32_t i = 0 ; i < len ; i++) {
+                data[i] = data[i] + receiveb;
+                data[i] = data[i] ^ receivek;
+            }
+            break;
+        case 2:
+            for (uint32_t i = 0 ; i < len ; i++) {
+                data[i] = data[i] ^ receivek;
+                data[i] = data[i] - receiveb;
+            }
+            break;
+        case 3:
+            for (uint32_t i = 0 ; i < len ; i++) {
+                data[i] = data[i] ^ receivek;
+                data[i] = data[i] + receiveb;
+            }
+            break;
+    }
 }
 
 int writenode (struct CLIENTLIST *writeclient) {
@@ -156,11 +225,7 @@ struct CLIENTLIST* braodcastdata (struct CLIENTLIST *sourceclient, unsigned char
         } else {
             memcpy(package->data, buff, packagesize);
             package->size = packagesize;
-            unsigned char *data = package->data;
-            unsigned char xormix = targetclient->xormix;
-            for (uint32_t i = 0 ; i < packagesize ; i++) {
-                data[i] ^= xormix;
-            }
+            encrypt(targetclient, package->data, packagesize);
         }
         package->tail = NULL;
         if (targetclient->packagelisthead == NULL) {
@@ -201,21 +266,31 @@ int readdata (struct FDCLIENT *fdclient) {
             return -2;
         }
         if (sourceclient) {
-            unsigned char xormix = sourceclient->xormix;
-            for (uint32_t i = 0 ; i < len ; i++) {
-                readbuf[i] ^= xormix;
-            }
+            decrypt(sourceclient, readbuf, len);
         }
     }
     int32_t offset = 0;
     if (sourceclient == NULL) { // 用户没有找到
-        if (readbuf[0] != 0x00 || readbuf[1] != 0x00 || readbuf[2] != 0x00) { // 前两个字节为0代表特殊命令，单独处理。第三个字节为0代表注册。
-            printf("just can run login, in %s, at %d\n",  __FILE__, __LINE__);
+        if (len < 9 + sizeof(password) - 1) {
+            printf("len abnormal, in %s, at %d\n",  __FILE__, __LINE__);
+            close (fd);
+            fdclient->tail = remainfdclienthead;
+            remainfdclienthead = fdclient;
             return -3;
         }
-        if (memcmp(readbuf + 4, password, sizeof(password)-1)) { // 绑定密码错误
-            printf("password check fail, in %s, at %d\n",  __FILE__, __LINE__);
+        if (readbuf[0] != 0x00 || readbuf[1] != 0x00 || readbuf[2] != 0x00) { // 前两个字节为0代表特殊命令，单独处理。第三个字节为0代表注册。
+            printf("just can run login, in %s, at %d\n",  __FILE__, __LINE__);
+            close (fd);
+            fdclient->tail = remainfdclienthead;
+            remainfdclienthead = fdclient;
             return -4;
+        }
+        if (memcmp(readbuf + 9, password, sizeof(password)-1)) { // 绑定密码错误
+            printf("password check fail, in %s, at %d\n",  __FILE__, __LINE__);
+            close (fd);
+            fdclient->tail = remainfdclienthead;
+            remainfdclienthead = fdclient;
+            return -5;
         }
         if (remainclientlisthead != NULL) {
             sourceclient = remainclientlisthead;
@@ -224,19 +299,31 @@ int readdata (struct FDCLIENT *fdclient) {
             sourceclient = (struct CLIENTLIST*) malloc(sizeof(struct CLIENTLIST));
             if (sourceclient == NULL) {
                 printf("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
-                return -5;
+                return -6;
             }
         }
-        unsigned char xormix = readbuf[3];
+        sourceclient->sendcrypt = readbuf[3];
+        sourceclient->sendk = readbuf[4];
+        sourceclient->sendb = readbuf[5];
+        sourceclient->receivecrypt = readbuf[6];
+        sourceclient->receivek = readbuf[7];
+        sourceclient->receiveb = readbuf[8];
+        unsigned char data[1];
+        data[0] = 0x01;
+        ssize_t wlen = write(fd, data, sizeof(data));
+        if (wlen < sizeof(data)) {
+            printf("write encrypt data fail, in %s, at %d\n",  __FILE__, __LINE__);
+            close (fd);
+            fdclient->tail = remainfdclienthead;
+            remainfdclienthead = fdclient;
+            return -7;
+        }
         sourceclient->fd = fd;
         memset(sourceclient->mac, 0, 6);
         sourceclient->fdclient = fdclient;
         sourceclient->packagelisthead = NULL;
         sourceclient->remainsize = 0;
         sourceclient->canwrite = 1;
-        sourceclient->xormix = xormix;
-        sourceclient->hashhead = NULL;
-        sourceclient->hashtail = NULL;
         sourceclient->head = NULL;
         if (clientlisthead) {
             clientlisthead->head = sourceclient;
@@ -244,11 +331,9 @@ int readdata (struct FDCLIENT *fdclient) {
         sourceclient->tail = clientlisthead;
         clientlisthead = sourceclient;
         fdclient->client = sourceclient;
-        offset += 4 + sizeof(password) - 1; // 绑定包长度
+        offset += 9 + sizeof(password) - 1; // 绑定包长度
         printf("add client success, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
-        for (uint32_t i = offset ; i < len ; i++) {
-            readbuf[i] ^= xormix;
-        }
+        decrypt(sourceclient, readbuf + offset, len - offset);
     }
     int32_t totalsize;
     unsigned char *buff;
@@ -262,7 +347,7 @@ int readdata (struct FDCLIENT *fdclient) {
             readbuff = (unsigned char*) malloc(totalsize * sizeof(unsigned char));
             if (readbuff == NULL) {
                 printf("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
-                return -6;
+                return -8;
             }
         }
         memcpy(readbuff, sourceclient->remainpackage, sourceclient->remainsize);
@@ -349,11 +434,7 @@ int readdata (struct FDCLIENT *fdclient) {
         } else {
             memcpy(package->data, buff + offset, packagesize);
             package->size = packagesize;
-            unsigned char *data = package->data;
-            unsigned char xormix = targetclient->xormix;
-            for (uint32_t i = 0 ; i < packagesize ; i++) {
-                data[i] ^= xormix;
-            }
+            encrypt(targetclient, package->data, packagesize);
         }
         package->tail = NULL;
         if (targetclient->packagelisthead == NULL) {
@@ -420,7 +501,6 @@ int tap_alloc () {
     tapclient->packagelisthead = NULL;
     tapclient->remainsize = 0;
     tapclient->canwrite = 1;
-    tapclient->xormix = 0;
     tapclient->hashhead = NULL;
     tapclient->hashtail = NULL;
     tapclient->head = NULL;
@@ -645,10 +725,10 @@ int removeclient (struct FDCLIENT *fdclient) {
         }
         client->tail = remainclientlisthead;
         remainclientlisthead = client;
+        printf("host %02x:%02x:%02x:%02x:%02x:%02x disconnect, in %s, at %d\n", client->mac[0], client->mac[1], client->mac[2], client->mac[3], client->mac[4], client->mac[5],  __FILE__, __LINE__);
     }
     fdclient->tail = remainfdclienthead;
     remainfdclienthead = fdclient;
-    printf("host %02x:%02x:%02x:%02x:%02x:%02x disconnect, in %s, at %d\n", client->mac[0], client->mac[1], client->mac[2], client->mac[3], client->mac[4], client->mac[5],  __FILE__, __LINE__);
     if (client == tapclient) { // 基本不可能情况
         do {
             sleep(RETRYINTERVAL);
@@ -664,7 +744,7 @@ int main () {
         machashlist[i] = NULL;
     }
     epollfd = epoll_create(MAX_EVENT);
-    printf("epollfd:%d\n", epollfd);
+    printf("epollfd:%d, in %s, at %d\n", epollfd, __FILE__, __LINE__);
     if (epollfd < 0) {
         printf("create epoll fd fail, in %s, at %d\n",  __FILE__, __LINE__);
         return -1;

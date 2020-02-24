@@ -40,7 +40,12 @@ struct CLIENTLIST {
     unsigned char remainpackage[MTU_SIZE + 18]; // 自己接收到的数据出现数据不全，将不全的数据存在这里，等待新的数据将其补全
     int remainsize; // 不全的数据大小
     int canwrite;
-    unsigned char xormix;
+    unsigned char sendcrypt;
+    unsigned char sendk;
+    unsigned char sendb;
+    unsigned char receivecrypt;
+    unsigned char receivek;
+    unsigned char receiveb;
 } tclient, sclient;
 struct CLIENTLIST *tapclient = &tclient;
 struct CLIENTLIST *socketclient = &sclient;
@@ -71,6 +76,70 @@ int modepoll (struct CLIENTLIST *client, int flags) {
     ev.data.ptr = client;
     ev.events = EPOLLIN | EPOLLERR | EPOLLHUP | EPOLLRDHUP | flags; // 水平触发，保证所有数据都能读到
     return epoll_ctl(epollfd, EPOLL_CTL_MOD, client->fd, &ev);
+}
+
+void encrypt (struct CLIENTLIST *targetclient, unsigned char *data, unsigned int len) {
+    unsigned char sendcrypt = targetclient->sendcrypt;
+    unsigned char sendk = targetclient->sendk;
+    unsigned char sendb = targetclient->sendb;
+    switch (sendcrypt) {
+        case 0:
+            for (unsigned int i = 0 ; i < len ; i++) {
+                data[i] = data[i] ^ sendk;
+                data[i] = data[i] + sendb;
+            }
+            break;
+        case 1:
+            for (unsigned int i = 0 ; i < len ; i++) {
+                data[i] = data[i] ^ sendk;
+                data[i] = data[i] - sendb;
+            }
+            break;
+        case 2:
+            for (unsigned int i = 0 ; i < len ; i++) {
+                data[i] = data[i] + sendb;
+                data[i] = data[i] ^ sendk;
+            }
+            break;
+        case 3:
+            for (unsigned int i = 0 ; i < len ; i++) {
+                data[i] = data[i] - sendb;
+                data[i] = data[i] ^ sendk;
+            }
+            break;
+    }
+}
+
+void decrypt (struct CLIENTLIST *sourceclient, unsigned char *data, uint32_t len) {
+    unsigned char receivecrypt = sourceclient->receivecrypt;
+    unsigned char receivek = sourceclient->receivek;
+    unsigned char receiveb = sourceclient->receiveb;
+    switch (receivecrypt) {
+        case 0:
+            for (uint32_t i = 0 ; i < len ; i++) {
+                data[i] = data[i] - receiveb;
+                data[i] = data[i] ^ receivek;
+            }
+            break;
+        case 1:
+            for (uint32_t i = 0 ; i < len ; i++) {
+                data[i] = data[i] + receiveb;
+                data[i] = data[i] ^ receivek;
+            }
+            break;
+        case 2:
+            for (uint32_t i = 0 ; i < len ; i++) {
+                data[i] = data[i] ^ receivek;
+                data[i] = data[i] - receiveb;
+            }
+            break;
+        case 3:
+            for (uint32_t i = 0 ; i < len ; i++) {
+                data[i] = data[i] ^ receivek;
+                data[i] = data[i] + receiveb;
+            }
+            break;
+    }
 }
 
 int writenode (struct CLIENTLIST *client) {
@@ -141,10 +210,7 @@ int readdata (struct CLIENTLIST *sourceclient) {
             return -2;
         }
         targetclient = tapclient;
-        unsigned char xormix = sourceclient->xormix;
-        for (uint32_t i = 0 ; i < len ; i++) {
-            readbuf[i] ^= xormix;
-        }
+        decrypt(sourceclient, readbuf, len);
     }
     int32_t offset = 0;
     int32_t totalsize;
@@ -203,11 +269,7 @@ int readdata (struct CLIENTLIST *sourceclient) {
         } else {
             memcpy(package->data, buff + offset, packagesize);
             package->size = packagesize;
-            unsigned char *data = package->data;
-            unsigned char xormix = targetclient->xormix;
-            for (uint32_t i = 0 ; i < packagesize ; i++) {
-                data[i] ^= xormix;
-            }
+            encrypt(targetclient, package->data, packagesize);
         }
         package->tail = NULL;
         if (targetclient->packagelisthead == NULL) {
@@ -249,7 +311,6 @@ int tap_alloc () {
     tapclient->packagelisthead = NULL;
     tapclient->remainsize = 0;
     tapclient->canwrite = 1;
-    tapclient->xormix = 0;
     if (addtoepoll(tapclient)) {
         printf("clientfd addtoepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
         close(fd);
@@ -280,46 +341,67 @@ int connect_socketfd (unsigned char *ip, unsigned int port) {
         close(fd);
         return -3;
     }
-    unsigned char data[4+sizeof(password)-1];
+    unsigned char data[9+sizeof(password)-1];
     memset(data, 0, 3);
-    data[3] = time(NULL) & 0xff;
-    memcpy(data + 4, password, sizeof(password)-1);
-    write(fd, data, sizeof(data));
+    socketclient->receivecrypt = data[3] = 0x03 & rand();
+    socketclient->receivek = data[4] = rand();
+    socketclient->receiveb = data[5] = rand();
+    socketclient->sendcrypt = data[6] = rand();
+    socketclient->sendk = data[7] = rand();
+    socketclient->sendb = data[8] = rand();
+    memcpy(data + 9, password, sizeof(password)-1);
+    ssize_t len = write(fd, data, sizeof(data));
+    if (len < sizeof(data)) {
+        printf("write fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
+        close(fd);
+        return -4;
+    }
+    len = read(fd, data, sizeof(data));
+    if (len < 1) {
+        printf("read fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
+        close(fd);
+        return -5;
+    }
+    if (data[0] != 0x01) {
+        printf("password check fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
+        close(fd);
+        return -6;
+    }
     if (setnonblocking(fd) < 0) { // 设置为非阻塞IO
         printf("set nonblocking fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
         close(fd);
-        return -4;
+        return -7;
     }
     unsigned int socksval = 1;
     if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (unsigned char*)&socksval, sizeof(socksval))) { // 关闭Nagle协议
         printf("close Nagle protocol fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
         close(fd);
-        return -5;
+        return -8;
     }
 #ifdef KEEPALIVE
     socksval = 1;
     if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, (unsigned char*)&socksval, sizeof(socksval))) { // 启动tcp心跳包
         printf("set socket keepalive fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
         close(fd);
-        return -6;
+        return -9;
     }
     socksval = KEEPIDLE;
     if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, (unsigned char*)&socksval, sizeof(socksval))) { // 设置tcp心跳包参数
         printf("set socket keepidle fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
         close(fd);
-        return -7;
+        return -10;
     }
     socksval = KEEPINTVL;
     if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, (unsigned char*)&socksval, sizeof(socksval))) { // 设置tcp心跳包参数
         printf("set socket keepintvl fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
         close(fd);
-        return -8;
+        return -11;
     }
     socksval = KEEPCNT;
     if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, (unsigned char*)&socksval, sizeof(socksval))) { // 设置tcp心跳包参数
         printf("set socket keepcnt fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
         close(fd);
-        return -9;
+        return -12;
     }
 #endif
     // 修改发送缓冲区大小
@@ -327,20 +409,20 @@ int connect_socketfd (unsigned char *ip, unsigned int port) {
     if (getsockopt(fd, SOL_SOCKET, SO_SNDBUF, (unsigned char*)&socksval, &socksval_len)) {
         printf("get send buffer fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         close(fd);
-        return -10;
+        return -13;
     }
     printf("old send buffer is %d, socksval_len:%d, fd:%d, in %s, at %d\n", socksval, socksval_len, fd,  __FILE__, __LINE__);
     socksval = MAXDATASIZE - MTU_SIZE;
     if (setsockopt(fd, SOL_SOCKET, SO_SNDBUF, (unsigned char*)&socksval, sizeof(socksval))) {
         printf("set send buffer fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         close(fd);
-        return -11;
+        return -14;
     }
     socksval_len = sizeof(socksval);
     if (getsockopt(fd, SOL_SOCKET, SO_SNDBUF, (unsigned char*)&socksval, &socksval_len)) {
         printf("get send buffer fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         close(fd);
-        return -12;
+        return -15;
     }
     printf("new send buffer is %d, socksval_len:%d, fd:%d, in %s, at %d\n", socksval, socksval_len, fd,  __FILE__, __LINE__);
     // 修改接收缓冲区大小
@@ -348,31 +430,30 @@ int connect_socketfd (unsigned char *ip, unsigned int port) {
     if (getsockopt(fd, SOL_SOCKET, SO_RCVBUF, (unsigned char*)&socksval, &socksval_len)) {
         printf("get receive buffer fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         close(fd);
-        return -13;
+        return -16;
     }
     printf("old receive buffer is %d, len:%d, fd:%d, in %s, at %d\n", socksval, socksval_len, fd,  __FILE__, __LINE__);
     socksval = MAXDATASIZE - MTU_SIZE;
     if (setsockopt(fd, SOL_SOCKET, SO_RCVBUF, (unsigned char*)&socksval, sizeof(socksval))) {
         printf("set receive buffer fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         close(fd);
-        return -14;
+        return -17;
     }
     socksval_len = sizeof(socksval);
     if (getsockopt(fd, SOL_SOCKET, SO_RCVBUF, (unsigned char*)&socksval, &socksval_len)) {
         printf("get receive buffer fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         close(fd);
-        return -15;
+        return -18;
     }
     printf("new receive buffer is %d, socksval_len:%d, fd:%d, in %s, at %d\n", socksval, socksval_len, fd,  __FILE__, __LINE__);
     socketclient->fd = fd;
     socketclient->packagelisthead = NULL;
     socketclient->remainsize = 0;
     socketclient->canwrite = 1;
-    socketclient->xormix = data[3];
     if (addtoepoll(socketclient)) {
         printf("tapfd addtoepoll fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         close(fd);
-        return -16;
+        return -19;
     }
     return 0;
 }
@@ -402,6 +483,7 @@ int removeclient (struct CLIENTLIST *client) {
 }
 
 int main () {
+    srand(time(NULL));
     epollfd = epoll_create(MAX_EVENT);
     if (epollfd < 0) {
         printf("create epoll fd fail, in %s, at %d\n",  __FILE__, __LINE__);
