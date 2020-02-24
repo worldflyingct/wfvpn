@@ -1,7 +1,3 @@
-#define serverip          "192.168.56.101" // 服务器的地址，不支持域名
-#define serverport        3480
-#define password          "vCIhnEMbk9wgK4uUxCptm4bFxAAkGdTs" // 密码固定为32位
-
 #include <stdio.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -50,6 +46,10 @@ struct CLIENTLIST {
 struct CLIENTLIST *tapclient = &tclient;
 struct CLIENTLIST *socketclient = &sclient;
 int epollfd;
+
+unsigned char serverip[16]; // 服务器的地址，不支持域名
+unsigned int serverport; // 服务器的连接端口
+unsigned char password[33]; // 密码固定为32位
 
 int setnonblocking (int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
@@ -346,7 +346,7 @@ int connect_socketfd (unsigned char *ip, unsigned int port) {
     socketclient->receivecrypt = data[3] = 0x03 & rand();
     socketclient->receivek = data[4] = rand();
     socketclient->receiveb = data[5] = rand();
-    socketclient->sendcrypt = data[6] = rand();
+    socketclient->sendcrypt = data[6] = 0x03 & rand();
     socketclient->sendk = data[7] = rand();
     socketclient->sendb = data[8] = rand();
     memcpy(data + 9, password, sizeof(password)-1);
@@ -482,7 +482,43 @@ int removeclient (struct CLIENTLIST *client) {
     return 0;
 }
 
-int main () {
+int parseargs (int argc, char *argv[]) {
+    strcpy(serverip, "192.168.56.101");
+    serverport = 3480;
+    strcpy(password, "vCIhnEMbk9wgK4uUxCptm4bFxAAkGdTs");
+    for (int i = 1 ; i < argc ; i++) {
+        if (!strcmp(argv[i], "-h")) {
+            i++;
+            if (strlen(argv[i]) >= 16) {
+                printf("server ip too long, in %s, at %d\n",  __FILE__, __LINE__);
+                return -1;
+            }
+            strcpy(serverip, argv[i]);
+        } else if (!strcmp(argv[i], "-p")) {
+            i++;
+            serverport = atoi(argv[i]);
+        } else if (!strcmp(argv[i], "-k")) {
+            i++;
+            if (strlen(argv[i]) != 32) {
+                printf("access key must 32 bytes, in %s, at %d\n",  __FILE__, __LINE__);
+                return -2;
+            }
+            strcpy(password, argv[i]);
+        } else {
+            printf("build time: %s %s\n", __DATE__, __TIME__);
+            printf("-h server ip, not support domain, default is 192.168.56.101\n");
+            printf("-p server port, default is 3480\n");
+            printf("-k access key, default is vCIhnEMbk9wgK4uUxCptm4bFxAAkGdTs\n");
+            return -3;
+        }
+    }
+    return 0;
+}
+
+int main (int argc, char *argv[]) {
+    if (parseargs (argc, argv)) {
+        return -1;
+    }
     srand(time(NULL));
     epollfd = epoll_create(MAX_EVENT);
     if (epollfd < 0) {

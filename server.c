@@ -1,6 +1,3 @@
-#define serverport        3480
-#define password          "vCIhnEMbk9wgK4uUxCptm4bFxAAkGdTs" // 密码固定为32位
-
 #include <stdio.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -64,6 +61,9 @@ struct FDCLIENT {
 struct FDCLIENT *remainfdclienthead = NULL;
 struct FDCLIENT *fdserver;
 int epollfd;
+
+unsigned int serverport; // 服务器的连接端口
+unsigned char password[33]; // 密码固定为32位
 
 int setnonblocking (int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
@@ -470,7 +470,6 @@ int tap_alloc () {
         printf("open tun node fail, in %s, at %d\n", __FILE__, __LINE__);
         return -1;
     }
-    printf("tapfd:%d\n", fd);
     struct ifreq ifr;
     memset(&ifr, 0, sizeof(ifr));
     ifr.ifr_flags = IFF_TAP | IFF_NO_PI;
@@ -484,7 +483,7 @@ int tap_alloc () {
         close(fd);
         return -3;
     }
-    printf("tap device name is %s, in %s, at %d\n", ifr.ifr_name, __FILE__, __LINE__);
+    printf("tap device name is %s, tapfd %d, in %s, at %d\n", ifr.ifr_name, fd, __FILE__, __LINE__);
     if (remainclientlisthead) {
         tapclient = remainclientlisthead;
         remainclientlisthead = remainclientlisthead->tail;
@@ -739,7 +738,34 @@ int removeclient (struct FDCLIENT *fdclient) {
     return 0;
 }
 
-int main () {
+int parseargs (int argc, char *argv[]) {
+    serverport = 3480;
+    strcpy(password, "vCIhnEMbk9wgK4uUxCptm4bFxAAkGdTs");
+    for (int i = 1 ; i < argc ; i++) {
+        if (!strcmp(argv[i], "-p")) {
+            i++;
+            serverport = atoi(argv[i]);
+        } else if (!strcmp(argv[i], "-k")) {
+            i++;
+            if (strlen(argv[i]) != 32) {
+                printf("access key must 32 bytes, in %s, at %d\n",  __FILE__, __LINE__);
+                return -1;
+            }
+            strcpy(password, argv[i]);
+        } else {
+            printf("build time: %s %s\n", __DATE__, __TIME__);
+            printf("-p server port, default is 3480\n");
+            printf("-k access key, default is vCIhnEMbk9wgK4uUxCptm4bFxAAkGdTs\n");
+            return -2;
+        }
+    }
+    return 0;
+}
+
+int main (int argc, char *argv[]) {
+    if (parseargs (argc, argv)) {
+        return -1;
+    }
     for (int i = 0 ; i < 4096 ; i++) {
         machashlist[i] = NULL;
     }
@@ -757,7 +783,7 @@ int main () {
         printf("create socket fd fail, in %s, at %d\n",  __FILE__, __LINE__);
         return -3;
     }
-    printf("init finish, server port is %d password is "password", in %s, at %d\n", serverport,  __FILE__, __LINE__);
+    printf("init finish, server port is %d password is %s, in %s, at %d\n", serverport, password,  __FILE__, __LINE__);
     while (1) {
         static struct epoll_event evs[MAX_EVENT];
         static int wait_count;
