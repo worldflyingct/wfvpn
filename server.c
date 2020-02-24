@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <sys/ioctl.h>
 #include <string.h>
+#include <errno.h>
 // 包入tun相关的头部
 #include <net/if.h>
 #include <linux/if_tun.h>
@@ -156,314 +157,6 @@ void decrypt (struct CLIENTLIST *sourceclient, unsigned char *data, uint32_t len
     }
 }
 
-int writenode (struct CLIENTLIST *writeclient) {
-    for (struct CLIENTLIST *client = writeclient ; client != NULL ; client = client->writetail) {
-        struct PACKAGELIST *package = client->packagelisthead;
-        client->packagelisthead = NULL;
-        while (package != NULL) {
-            ssize_t len = write(client->fd, package->data, package->size);
-            if (len < package->size) { // 缓冲区不足，已无法继续写入数据。
-                if (len < 0) {
-                    if (client == tapclient) {
-                        perror("tap write error");
-                    } else {
-                        perror("socket write error");
-                    }
-                    client->packagelisthead = package;
-                    break;
-                }
-                int size = package->size - len;
-                unsigned char tmpdata[MTU_SIZE + 18];
-                memcpy(tmpdata, package->data + len, size);
-                memcpy(package->data, tmpdata, size);
-                package->size = size;
-                client->packagelisthead = package;
-                if (client->canwrite) { // 之前缓冲区是可以写入的，现在不行了
-                    if (modepoll(client->fdclient, EPOLLOUT)) { // 监听可写事件
-                        printf("modepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
-                        break;
-                    }
-                    client->canwrite = 0;
-                }
-                break;
-            } else if (client->canwrite == 0) { // 缓冲区尚有空间，并且之前已经提示不足
-                if (modepoll(client->fdclient, 0)) { // 取消监听可写事件
-                    printf("modepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
-                    break;
-                }
-                client->canwrite = 1;
-            }
-            struct PACKAGELIST *tmppackage = package;
-            package = package->tail;
-            tmppackage->tail = remainpackagelisthead;
-            remainpackagelisthead = tmppackage;
-        }
-    }
-    return 0;
-}
-
-struct CLIENTLIST* braodcastdata (struct CLIENTLIST *sourceclient, unsigned char *buff, int32_t packagesize) {
-    struct CLIENTLIST *writeclient = NULL;
-    for (struct CLIENTLIST *targetclient = clientlisthead ; targetclient != NULL ; targetclient = targetclient->tail) {
-        if (targetclient == sourceclient) {
-            continue;
-        }
-        struct PACKAGELIST *package;
-        if (remainpackagelisthead != NULL) { // 全局数据包回收站不为空
-            package = remainpackagelisthead;
-            remainpackagelisthead = remainpackagelisthead->tail;
-        } else {
-            package = (struct PACKAGELIST*) malloc(sizeof(struct PACKAGELIST));
-            if (package == NULL) {
-                printf("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
-                continue;
-            }
-        }
-        if (targetclient == tapclient) {
-            memcpy(package->data, buff + 2, packagesize - 2);
-            package->size = packagesize - 2;
-        } else {
-            memcpy(package->data, buff, packagesize);
-            package->size = packagesize;
-            encrypt(targetclient, package->data, packagesize);
-        }
-        package->tail = NULL;
-        if (targetclient->packagelisthead == NULL) {
-            targetclient->packagelisthead = package;
-            targetclient->packagelisttail = targetclient->packagelisthead;
-        } else {
-            targetclient->packagelisttail->tail = package;
-            targetclient->packagelisttail = targetclient->packagelisttail->tail;
-        }
-        if (targetclient->canwrite) {
-            targetclient->writetail = writeclient;
-            writeclient = targetclient;
-        }
-    }
-    return writeclient;
-}
-
-int readdata (struct FDCLIENT *fdclient) {
-    unsigned char readbuf[MAXDATASIZE]; // 这里使用static关键词是为了将数据存储与数据段，减小对栈空间的压力。
-    static unsigned char *readbuff = NULL; // 这里是用于存储全部的需要写入的数据buf，
-    static unsigned int maxtotalsize = 0;
-    int fd = fdclient->fd;
-    struct CLIENTLIST *sourceclient = fdclient->client;
-    ssize_t len;
-    if (sourceclient == tapclient) { // tap驱动，原始数据，需要自己额外添加数据包长度。
-        len = read(fd, readbuf + 2, MAXDATASIZE); // 这里最大只可能是1518
-        if (len < 0) {
-            perror("tap read error");
-            return -1;
-        }
-        readbuf[0] = len >> 8;
-        readbuf[1] = len & 0xff;
-        len += 2;
-    } else { // 网络套接字。
-        len = read(fd, readbuf, MAXDATASIZE);
-        if (len < 0) {
-            perror("socket read error");
-            return -2;
-        }
-        if (sourceclient) {
-            decrypt(sourceclient, readbuf, len);
-        }
-    }
-    int32_t offset = 0;
-    if (sourceclient == NULL) { // 用户没有找到
-        if (len < 9 + sizeof(password) - 1) {
-            printf("len abnormal, in %s, at %d\n",  __FILE__, __LINE__);
-            close (fd);
-            fdclient->tail = remainfdclienthead;
-            remainfdclienthead = fdclient;
-            return -3;
-        }
-        if (readbuf[0] != 0x00 || readbuf[1] != 0x00 || readbuf[2] != 0x00) { // 前两个字节为0代表特殊命令，单独处理。第三个字节为0代表注册。
-            printf("just can run login, in %s, at %d\n",  __FILE__, __LINE__);
-            close (fd);
-            fdclient->tail = remainfdclienthead;
-            remainfdclienthead = fdclient;
-            return -4;
-        }
-        if (memcmp(readbuf + 9, password, sizeof(password)-1)) { // 绑定密码错误
-            printf("password check fail, in %s, at %d\n",  __FILE__, __LINE__);
-            close (fd);
-            fdclient->tail = remainfdclienthead;
-            remainfdclienthead = fdclient;
-            return -5;
-        }
-        if (remainclientlisthead != NULL) {
-            sourceclient = remainclientlisthead;
-            remainclientlisthead = remainclientlisthead->tail;
-        } else {
-            sourceclient = (struct CLIENTLIST*) malloc(sizeof(struct CLIENTLIST));
-            if (sourceclient == NULL) {
-                printf("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
-                return -6;
-            }
-        }
-        sourceclient->sendcrypt = readbuf[3];
-        sourceclient->sendk = readbuf[4];
-        sourceclient->sendb = readbuf[5];
-        sourceclient->receivecrypt = readbuf[6];
-        sourceclient->receivek = readbuf[7];
-        sourceclient->receiveb = readbuf[8];
-        unsigned char data[1];
-        data[0] = 0x01;
-        ssize_t wlen = write(fd, data, sizeof(data));
-        if (wlen < sizeof(data)) {
-            printf("write encrypt data fail, in %s, at %d\n",  __FILE__, __LINE__);
-            close (fd);
-            fdclient->tail = remainfdclienthead;
-            remainfdclienthead = fdclient;
-            return -7;
-        }
-        sourceclient->fd = fd;
-        memset(sourceclient->mac, 0, 6);
-        sourceclient->fdclient = fdclient;
-        sourceclient->packagelisthead = NULL;
-        sourceclient->remainsize = 0;
-        sourceclient->canwrite = 1;
-        sourceclient->head = NULL;
-        if (clientlisthead) {
-            clientlisthead->head = sourceclient;
-        }
-        sourceclient->tail = clientlisthead;
-        clientlisthead = sourceclient;
-        fdclient->client = sourceclient;
-        offset += 9 + sizeof(password) - 1; // 绑定包长度
-        printf("add client success, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
-        decrypt(sourceclient, readbuf + offset, len - offset);
-    }
-    int32_t totalsize;
-    unsigned char *buff;
-    if (sourceclient->remainsize > 0) {
-        totalsize = sourceclient->remainsize + len;
-        if (totalsize > maxtotalsize) {
-            maxtotalsize = totalsize;
-            if (readbuff != NULL) {
-                free(readbuff);
-            }
-            readbuff = (unsigned char*) malloc(totalsize * sizeof(unsigned char));
-            if (readbuff == NULL) {
-                printf("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
-                return -8;
-            }
-        }
-        memcpy(readbuff, sourceclient->remainpackage, sourceclient->remainsize);
-        memcpy(readbuff + sourceclient->remainsize, readbuf, len);
-        sourceclient->remainsize = 0;
-        buff = readbuff;
-    } else {
-        // printf("in %s, at %d\n",  __FILE__, __LINE__);
-        totalsize = len;
-        buff = readbuf;
-    }
-    struct CLIENTLIST *writeclient = NULL;
-    while (offset < totalsize) {
-        if (offset + 64 > totalsize) { // mac帧单个最小必须是64个，小于这个的数据包一定不完整
-            int remainsize = totalsize - offset;
-            memcpy(sourceclient->remainpackage, buff + offset, remainsize);
-            sourceclient->remainsize = remainsize;
-            break;
-        }
-        int packagesize = 256 * buff[offset] + buff[offset+1] + 2; // 当前数据帧大小
-        if (offset + packagesize > totalsize) {
-            int remainsize = totalsize - offset;
-            memcpy(sourceclient->remainpackage, buff + offset, remainsize);
-            sourceclient->remainsize = remainsize;
-            break;
-        }
-// 自学习算法开始
-        unsigned int srchash = 256 * buff[offset+12] + buff[offset+13];
-        if (sourceclient != machashlist[srchash]) {
-            if (sourceclient->mac[0] != 0x00 || sourceclient->mac[1] != 0x00 || sourceclient->mac[2] != 0x00 || sourceclient->mac[3] != 0x00 || sourceclient->mac[4] != 0x00 || sourceclient->mac[5] != 0x00) {
-                unsigned int oldhash = 256 * sourceclient->mac[5] + sourceclient->mac[6];
-                if (sourceclient->hashhead) {
-                    sourceclient->hashhead->hashtail = sourceclient->hashtail;
-                } else {
-                    machashlist[oldhash] = sourceclient->hashtail;
-                }
-                if (sourceclient->hashtail) {
-                    sourceclient->hashtail->hashhead = sourceclient->hashhead;
-                }
-                sourceclient->hashhead = NULL;
-            }
-            if (machashlist[srchash]) {
-                machashlist[srchash]->hashhead = sourceclient;
-            }
-            sourceclient->hashtail = machashlist[srchash];
-            machashlist[srchash] = sourceclient;
-        }
-        memcpy(sourceclient->mac, buff + offset + 8, 6);
-// 自学习算法结束
-        unsigned char targetmac[6];
-        memcpy(targetmac, buff + offset + 2, 6);
-        if (targetmac[0] == 0xff && targetmac[1] == 0xff && targetmac[2] == 0xff && targetmac[3] == 0xff && targetmac[4] == 0xff && targetmac[5] == 0xff) { // 广播帧
-            writeclient = braodcastdata(sourceclient, buff + offset, packagesize);
-            offset += packagesize;
-            continue;
-        }
-        unsigned int dsthash = 256 * buff[offset+6] + buff[offset+7];
-        struct CLIENTLIST *targetclient;
-        for (targetclient = machashlist[dsthash] ; targetclient != NULL ; targetclient = targetclient->tail) {
-            if (!memcmp(targetclient->mac, targetmac, 4)) {
-                break;
-            }
-        }
-        if (targetclient == NULL) { // mac地址表中不存在，使用广播策略
-            writeclient = braodcastdata(sourceclient, buff + offset, packagesize);
-            offset += packagesize;
-            continue;
-        }
-        struct PACKAGELIST *package;
-        if (remainpackagelisthead != NULL) { // 全局数据包回收站不为空
-            package = remainpackagelisthead;
-            remainpackagelisthead = remainpackagelisthead->tail;
-        } else {
-            package = (struct PACKAGELIST*) malloc(sizeof(struct PACKAGELIST));
-            if (package == NULL) {
-                printf("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
-                offset += packagesize;
-                continue;
-            }
-        }
-        if (targetclient == tapclient) {
-            memcpy(package->data, buff + offset + 2, packagesize - 2);
-            package->size = packagesize - 2;
-        } else {
-            memcpy(package->data, buff + offset, packagesize);
-            package->size = packagesize;
-            encrypt(targetclient, package->data, packagesize);
-        }
-        package->tail = NULL;
-        if (targetclient->packagelisthead == NULL) {
-            targetclient->packagelisthead = package;
-            targetclient->packagelisttail = targetclient->packagelisthead;
-        } else {
-            targetclient->packagelisttail->tail = package;
-            targetclient->packagelisttail = targetclient->packagelisttail->tail;
-        }
-        if (!targetclient->canwrite) {
-            offset += packagesize;
-            continue;
-        }
-        struct CLIENTLIST *tmpclient;
-        for (tmpclient = writeclient ; tmpclient != NULL ; tmpclient = tmpclient->writetail) {
-            if (tmpclient == targetclient) {
-                break;
-            }
-        }
-        if (tmpclient == NULL) {
-            targetclient->writetail = writeclient;
-            writeclient = targetclient;
-        }
-        offset += packagesize;
-    }
-    writenode(writeclient);
-    return 0;
-}
-
 int tap_alloc () {
     int fd = open("/dev/net/tun", O_RDWR);
     if (fd < 0) {
@@ -509,7 +202,7 @@ int tap_alloc () {
     tapclient->tail = clientlisthead;
     clientlisthead = tapclient;
     struct FDCLIENT* fdclient;
-    if (remainfdclienthead != NULL) { // 有存货，直接拿出来用
+    if (remainfdclienthead) { // 有存货，直接拿出来用
         fdclient = remainfdclienthead;
         remainfdclienthead = remainfdclienthead->tail;
     } else { // 没有存货，malloc一个
@@ -543,7 +236,7 @@ int create_socketfd () {
     struct sockaddr_in sin;
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) {
-        printf("run socket function is fail, in %s, at %d\n", __FILE__, __LINE__);
+        printf("run socket function is fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
         return -1;
     }
     memset(&sin, 0, sizeof(struct sockaddr_in));
@@ -551,22 +244,22 @@ int create_socketfd () {
     sin.sin_addr.s_addr = INADDR_ANY; // 本机任意ip
     sin.sin_port = htons(serverport);
     if (bind(fd, (struct sockaddr*)&sin, sizeof(sin)) < 0) {
-        printf("bind port %d fail, in %s, at %d\n", serverport, __FILE__, __LINE__);
+        printf("bind port %d fail, fd:%d, in %s, at %d\n", fd, serverport, __FILE__, __LINE__);
         close(fd);
         return -2;
     }
     if (listen(fd, MAX_CONNECT) < 0) {
-        printf("listen port %d fail, in %s, at %d\n", serverport, __FILE__, __LINE__);
+        printf("listen port %d fail, fd:%d, in %s, at %d\n", fd, serverport, __FILE__, __LINE__);
         close(fd);
         return -3;
     }
-    if (remainfdclienthead != NULL) { // 有存货，直接拿出来用
+    if (remainfdclienthead) { // 有存货，直接拿出来用
         fdserver = remainfdclienthead;
         remainfdclienthead = remainfdclienthead->tail;
     } else { // 没有存货，malloc一个
         fdserver = (struct FDCLIENT*) malloc(sizeof(struct FDCLIENT));
         if (fdserver == NULL) {
-            printf("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
+            printf("malloc fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
             close(fd);
             return -5;
         }
@@ -574,7 +267,7 @@ int create_socketfd () {
     fdserver->fd = fd;
     fdserver->client = NULL;
     if (addtoepoll(fdserver)) {
-        printf("serverfd add to epoll fail, in %s, at %d\n",  __FILE__, __LINE__);
+        printf("serverfd add to epoll fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         fdserver->tail = remainfdclienthead;
         remainfdclienthead = fdserver;
         return -6;
@@ -588,7 +281,7 @@ int addclient (int serverfd) {
     int fd = accept(serverfd, (struct sockaddr*)&sin, &in_addr_len);
     printf("new socket:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
     if (fd < 0) {
-        printf("accept a new fd fail, in %s, at %d\n",  __FILE__, __LINE__);
+        printf("accept a new fd fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         return -1;
     }
     if (setnonblocking(fd) < 0) { // 设置为非阻塞IO
@@ -671,7 +364,7 @@ int addclient (int serverfd) {
     }
     printf("new receive buffer is %d, socksval_len:%d, fd:%d, in %s, at %d\n", socksval, socksval_len, fd,  __FILE__, __LINE__);
     struct FDCLIENT *fdclient;
-    if (remainfdclienthead != NULL) { // 有存货，直接拿出来用
+    if (remainfdclienthead) { // 有存货，直接拿出来用
         fdclient = remainfdclienthead;
         remainfdclienthead = remainfdclienthead->tail;
     } else { // 没有存货，malloc一个
@@ -710,9 +403,12 @@ int removeclient (struct FDCLIENT *fdclient) {
                 client->hashtail->hashhead = client->hashhead;
             }
         }
-        for (struct PACKAGELIST *package = client->packagelisthead ; package != NULL ; package = package->tail) {
-            package->tail = remainpackagelisthead;
-            remainpackagelisthead = package;
+        struct PACKAGELIST *package = client->packagelisthead;
+        while (package) {
+            struct PACKAGELIST *tmppackage = package;
+            package = package->tail;
+            tmppackage->tail = remainpackagelisthead;
+            remainpackagelisthead = tmppackage;
         }
         if (client->head) {
             client->head->tail = client->tail;
@@ -735,6 +431,320 @@ int removeclient (struct FDCLIENT *fdclient) {
         }
         while(tap_alloc());
     }
+    return 0;
+}
+
+int writenode (struct CLIENTLIST *writeclient) {
+    for (struct CLIENTLIST *client = writeclient ; client != NULL ; client = client->writetail) {
+        struct PACKAGELIST *package = client->packagelisthead;
+        client->packagelisthead = NULL;
+        while (package) {
+            ssize_t len = write(client->fd, package->data, package->size);
+            if (len < package->size) { // 缓冲区不足，已无法继续写入数据。
+                if (len < 0) {
+                    printf("errno:%d, in %s, at %d\n", errno,  __FILE__, __LINE__);
+                    if (client == tapclient) {
+                        perror("tap write error");
+                    } else {
+                        perror("socket write error");
+                    }
+                    client->packagelisthead = package;
+                    if (errno == 104) {
+                        removeclient(client->fdclient);
+                        return -1;
+                    }
+                    break;
+                }
+                int size = package->size - len;
+                unsigned char tmpdata[MTU_SIZE + 18];
+                memcpy(tmpdata, package->data + len, size);
+                memcpy(package->data, tmpdata, size);
+                package->size = size;
+                client->packagelisthead = package;
+                if (client->canwrite) { // 之前缓冲区是可以写入的，现在不行了
+                    if (modepoll(client->fdclient, EPOLLOUT)) { // 监听可写事件
+                        printf("modepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
+                        break;
+                    }
+                    client->canwrite = 0;
+                }
+                break;
+            } else if (client->canwrite == 0) { // 缓冲区尚有空间，并且之前已经提示不足
+                if (modepoll(client->fdclient, 0)) { // 取消监听可写事件
+                    printf("modepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
+                    break;
+                }
+                client->canwrite = 1;
+            }
+            struct PACKAGELIST *tmppackage = package;
+            package = package->tail;
+            tmppackage->tail = remainpackagelisthead;
+            remainpackagelisthead = tmppackage;
+        }
+    }
+    return 0;
+}
+
+struct CLIENTLIST* braodcastdata (struct CLIENTLIST *sourceclient, unsigned char *buff, int32_t packagesize) {
+    struct CLIENTLIST *writeclient = NULL;
+    for (struct CLIENTLIST *targetclient = clientlisthead ; targetclient != NULL ; targetclient = targetclient->tail) {
+        if (targetclient == sourceclient) {
+            continue;
+        }
+        struct PACKAGELIST *package;
+        if (remainpackagelisthead) { // 全局数据包回收站不为空
+            package = remainpackagelisthead;
+            remainpackagelisthead = remainpackagelisthead->tail;
+        } else {
+            package = (struct PACKAGELIST*) malloc(sizeof(struct PACKAGELIST));
+            if (package == NULL) {
+                printf("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
+                continue;
+            }
+        }
+        if (targetclient == tapclient) {
+            memcpy(package->data, buff + 2, packagesize - 2);
+            package->size = packagesize - 2;
+        } else {
+            memcpy(package->data, buff, packagesize);
+            package->size = packagesize;
+            encrypt(targetclient, package->data, packagesize);
+        }
+        package->tail = NULL;
+        if (targetclient->packagelisthead == NULL) {
+            targetclient->packagelisthead = package;
+            targetclient->packagelisttail = targetclient->packagelisthead;
+        } else {
+            targetclient->packagelisttail->tail = package;
+            targetclient->packagelisttail = targetclient->packagelisttail->tail;
+        }
+        if (targetclient->canwrite) {
+            targetclient->writetail = writeclient;
+            writeclient = targetclient;
+        }
+    }
+    return writeclient;
+}
+
+int readdata (struct FDCLIENT *fdclient) {
+    unsigned char readbuf[MAXDATASIZE]; // 这里使用static关键词是为了将数据存储与数据段，减小对栈空间的压力。
+    static unsigned char *readbuff = NULL; // 这里是用于存储全部的需要写入的数据buf，
+    static unsigned int maxtotalsize = 0;
+    int fd = fdclient->fd;
+    struct CLIENTLIST *sourceclient = fdclient->client;
+    ssize_t len;
+    if (sourceclient == tapclient) { // tap驱动，原始数据，需要自己额外添加数据包长度。
+        len = read(fd, readbuf + 2, MAXDATASIZE); // 这里最大只可能是1518
+        if (len < 0) {
+            printf("errno:%d, in %s, at %d\n", errno,  __FILE__, __LINE__);
+            perror("tap read error");
+            removeclient(fdclient);
+            return -1;
+        }
+        readbuf[0] = len >> 8;
+        readbuf[1] = len & 0xff;
+        len += 2;
+    } else { // 网络套接字。
+        len = read(fd, readbuf, MAXDATASIZE);
+        if (len < 0) {
+            printf("errno:%d, in %s, at %d\n", errno,  __FILE__, __LINE__);
+            perror("socket read error");
+            removeclient(fdclient);
+            return -2;
+        }
+        if (sourceclient) {
+            decrypt(sourceclient, readbuf, len);
+        }
+    }
+    int32_t offset = 0;
+    if (sourceclient == NULL) { // 用户没有找到
+        if (len < 9 + sizeof(password) - 1) {
+            printf("len abnormal, in %s, at %d\n",  __FILE__, __LINE__);
+            removeclient(fdclient);
+            return -3;
+        }
+        if (readbuf[0] != 0x00 || readbuf[1] != 0x00 || readbuf[2] != 0x00) { // 前两个字节为0代表特殊命令，单独处理。第三个字节为0代表注册。
+            printf("just can run login, in %s, at %d\n",  __FILE__, __LINE__);
+            removeclient(fdclient);
+            return -4;
+        }
+        if (memcmp(readbuf + 9, password, sizeof(password)-1)) { // 绑定密码错误
+            printf("password check fail, in %s, at %d\n",  __FILE__, __LINE__);
+            removeclient(fdclient);
+            return -5;
+        }
+        if (remainclientlisthead) {
+            sourceclient = remainclientlisthead;
+            remainclientlisthead = remainclientlisthead->tail;
+        } else {
+            sourceclient = (struct CLIENTLIST*) malloc(sizeof(struct CLIENTLIST));
+            if (sourceclient == NULL) {
+                printf("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
+                removeclient(fdclient);
+                return -6;
+            }
+        }
+        if (readbuf[3] >= 4 || readbuf[6] >= 4) {
+            printf("send crypt type or receive crypt type error in %s, at %d\n",  __FILE__, __LINE__);
+            removeclient(fdclient);
+            return -7;
+        }
+        sourceclient->sendcrypt = readbuf[3];
+        sourceclient->sendk = readbuf[4];
+        sourceclient->sendb = readbuf[5];
+        sourceclient->receivecrypt = readbuf[6];
+        sourceclient->receivek = readbuf[7];
+        sourceclient->receiveb = readbuf[8];
+        unsigned char data[1];
+        data[0] = 0x01;
+        ssize_t wlen = write(fd, data, sizeof(data));
+        if (wlen != sizeof(data)) {
+            printf("write encrypt data fail, in %s, at %d\n",  __FILE__, __LINE__);
+            removeclient(fdclient);
+            return -8;
+        }
+        sourceclient->fd = fd;
+        memset(sourceclient->mac, 0, 6);
+        sourceclient->fdclient = fdclient;
+        sourceclient->packagelisthead = NULL;
+        sourceclient->remainsize = 0;
+        sourceclient->canwrite = 1;
+        sourceclient->head = NULL;
+        if (clientlisthead) {
+            clientlisthead->head = sourceclient;
+        }
+        sourceclient->tail = clientlisthead;
+        clientlisthead = sourceclient;
+        fdclient->client = sourceclient;
+        offset += 9 + sizeof(password) - 1; // 绑定包长度
+        printf("add client success, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
+        decrypt(sourceclient, readbuf + offset, len - offset);
+    }
+    int32_t totalsize;
+    unsigned char *buff;
+    if (sourceclient->remainsize > 0) {
+        totalsize = sourceclient->remainsize + len;
+        if (totalsize > maxtotalsize) {
+            if (readbuff) {
+                free(readbuff);
+            }
+            readbuff = (unsigned char*) malloc(totalsize * sizeof(unsigned char));
+            if (readbuff == NULL) {
+                printf("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
+                return -9;
+            }
+            maxtotalsize = totalsize;
+        }
+        memcpy(readbuff, sourceclient->remainpackage, sourceclient->remainsize);
+        memcpy(readbuff + sourceclient->remainsize, readbuf, len);
+        sourceclient->remainsize = 0;
+        buff = readbuff;
+    } else {
+        totalsize = len;
+        buff = readbuf;
+    }
+    struct CLIENTLIST *writeclient = NULL;
+    while (offset < totalsize) {
+        if (offset + 64 > totalsize) { // mac帧单个最小必须是64个，小于这个的数据包一定不完整
+            int remainsize = totalsize - offset;
+            memcpy(sourceclient->remainpackage, buff + offset, remainsize);
+            sourceclient->remainsize = remainsize;
+            break;
+        }
+        int packagesize = 256 * buff[offset] + buff[offset+1] + 2; // 当前数据帧大小
+        if (offset + packagesize > totalsize) {
+            int remainsize = totalsize - offset;
+            memcpy(sourceclient->remainpackage, buff + offset, remainsize);
+            sourceclient->remainsize = remainsize;
+            break;
+        }
+// 自学习算法开始
+        unsigned int srchash = 256 * buff[offset+12] + buff[offset+13];
+        if (sourceclient != machashlist[srchash]) {
+            if (sourceclient->mac[0] != 0x00 || sourceclient->mac[1] != 0x00 || sourceclient->mac[2] != 0x00 || sourceclient->mac[3] != 0x00 || sourceclient->mac[4] != 0x00 || sourceclient->mac[5] != 0x00) {
+                unsigned int oldhash = 256 * sourceclient->mac[5] + sourceclient->mac[6];
+                if (sourceclient->hashhead) {
+                    sourceclient->hashhead->hashtail = sourceclient->hashtail;
+                } else {
+                    machashlist[oldhash] = sourceclient->hashtail;
+                }
+                if (sourceclient->hashtail) {
+                    sourceclient->hashtail->hashhead = sourceclient->hashhead;
+                }
+                sourceclient->hashhead = NULL;
+            }
+            if (machashlist[srchash]) {
+                machashlist[srchash]->hashhead = sourceclient;
+            }
+            sourceclient->hashtail = machashlist[srchash];
+            machashlist[srchash] = sourceclient;
+        }
+        memcpy(sourceclient->mac, buff + offset + 8, 6);
+// 自学习算法结束
+        unsigned char targetmac[6];
+        memcpy(targetmac, buff + offset + 2, 6);
+        if (targetmac[0] == 0xff && targetmac[1] == 0xff && targetmac[2] == 0xff && targetmac[3] == 0xff && targetmac[4] == 0xff && targetmac[5] == 0xff) { // 广播帧
+            writeclient = braodcastdata(sourceclient, buff + offset, packagesize);
+            offset += packagesize;
+            continue;
+        }
+        unsigned int dsthash = 256 * buff[offset+6] + buff[offset+7];
+        struct CLIENTLIST *targetclient;
+        for (targetclient = machashlist[dsthash] ; targetclient != NULL ; targetclient = targetclient->tail) {
+            if (!memcmp(targetclient->mac, targetmac, 4)) {
+                break;
+            }
+        }
+        if (targetclient == NULL) { // mac地址表中不存在，使用广播策略
+            writeclient = braodcastdata(sourceclient, buff + offset, packagesize);
+            offset += packagesize;
+            continue;
+        }
+        struct PACKAGELIST *package;
+        if (remainpackagelisthead) { // 全局数据包回收站不为空
+            package = remainpackagelisthead;
+            remainpackagelisthead = remainpackagelisthead->tail;
+        } else {
+            package = (struct PACKAGELIST*) malloc(sizeof(struct PACKAGELIST));
+            if (package == NULL) {
+                printf("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
+                offset += packagesize;
+                continue;
+            }
+        }
+        if (targetclient == tapclient) {
+            memcpy(package->data, buff + offset + 2, packagesize - 2);
+            package->size = packagesize - 2;
+        } else {
+            memcpy(package->data, buff + offset, packagesize);
+            package->size = packagesize;
+            encrypt(targetclient, package->data, packagesize);
+        }
+        package->tail = NULL;
+        if (targetclient->packagelisthead == NULL) {
+            targetclient->packagelisthead = package;
+            targetclient->packagelisttail = targetclient->packagelisthead;
+        } else {
+            targetclient->packagelisttail->tail = package;
+            targetclient->packagelisttail = targetclient->packagelisttail->tail;
+        }
+        if (!targetclient->canwrite) {
+            offset += packagesize;
+            continue;
+        }
+        struct CLIENTLIST *tmpclient;
+        for (tmpclient = writeclient ; tmpclient != NULL ; tmpclient = tmpclient->writetail) {
+            if (tmpclient == targetclient) {
+                break;
+            }
+        }
+        if (tmpclient == NULL) {
+            targetclient->writetail = writeclient;
+            writeclient = targetclient;
+        }
+        offset += packagesize;
+    }
+    writenode(writeclient);
     return 0;
 }
 
@@ -798,10 +808,7 @@ int main (int argc, char *argv[]) {
             } else if (fdclient == fdserver) {
                 addclient(fdclient->fd);
             } else if (events & EPOLLIN) { // 数据可读
-                if (readdata(fdclient)) {
-                    removeclient(fdclient);
-                    continue;
-                }
+                readdata(fdclient);
             } else if (events & EPOLLOUT) { // 数据可写
                 fdclient->client->writetail = NULL;
                 writenode(fdclient->client);
