@@ -38,11 +38,13 @@ struct CLIENTLIST {
     int remainsize; // 不全的数据大小
     int canwrite;
     unsigned char sendcrypt;
-    unsigned char sendk;
+    unsigned char senda;
     unsigned char sendb;
+    unsigned char sendc;
     unsigned char receivecrypt;
-    unsigned char receivek;
+    unsigned char receivea;
     unsigned char receiveb;
+    unsigned char receivec;
 } tclient, sclient;
 struct CLIENTLIST *tapclient = &tclient;
 struct CLIENTLIST *socketclient = &sclient;
@@ -51,6 +53,7 @@ int epollfd;
 unsigned char serverip[16]; // 服务器的地址，不支持域名
 unsigned int serverport; // 服务器的连接端口
 unsigned char password[33]; // 密码固定为32位
+unsigned char crypt; // 是否加密
 
 int setnonblocking (int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
@@ -81,65 +84,203 @@ int modepoll (struct CLIENTLIST *client, int flags) {
 
 void encrypt (struct CLIENTLIST *targetclient, unsigned char *data, unsigned int len) {
     unsigned char sendcrypt = targetclient->sendcrypt;
-    unsigned char sendk = targetclient->sendk;
+    unsigned char senda = targetclient->senda;
     unsigned char sendb = targetclient->sendb;
+    unsigned char sendc = targetclient->sendc;
     switch (sendcrypt) {
-        case 0:
-            for (unsigned int i = 0 ; i < len ; i++) {
-                data[i] = data[i] ^ sendk;
-                data[i] = data[i] + sendb;
-            }
-            break;
         case 1:
             for (unsigned int i = 0 ; i < len ; i++) {
-                data[i] = data[i] ^ sendk;
-                data[i] = data[i] - sendb;
+                unsigned char d = data[i];
+                d = d ^ senda;
+                d = d + sendb;
+                for (unsigned char j = 0 ; j < sendc ; j++) {
+                    if (d & 0x80) {
+                        d = (d << 1) | 0x01;
+                    } else {
+                        d = d << 1;
+                    }
+                }
+                data[i] = d;
             }
             break;
         case 2:
             for (unsigned int i = 0 ; i < len ; i++) {
-                data[i] = data[i] + sendb;
-                data[i] = data[i] ^ sendk;
+                unsigned char d = data[i];
+                d = d ^ senda;
+                for (unsigned char j = 0 ; j < sendc ; j++) {
+                    if (d & 0x80) {
+                        d = (d << 1) | 0x01;
+                    } else {
+                        d = d << 1;
+                    }
+                }
+                d = d + sendb;
+                data[i] = d;
             }
             break;
         case 3:
             for (unsigned int i = 0 ; i < len ; i++) {
-                data[i] = data[i] - sendb;
-                data[i] = data[i] ^ sendk;
+                unsigned char d = data[i];
+                d = d + sendb;
+                d = d ^ senda;
+                for (unsigned char j = 0 ; j < sendc ; j++) {
+                    if (d & 0x80) {
+                        d = (d << 1) | 0x01;
+                    } else {
+                        d = d << 1;
+                    }
+                }
+                data[i] = d;
             }
             break;
+        case 4:
+            for (unsigned int i = 0 ; i < len ; i++) {
+                unsigned char d = data[i];
+                d = d + sendb;
+                for (unsigned char j = 0 ; j < sendc ; j++) {
+                    if (d & 0x80) {
+                        d = (d << 1) | 0x01;
+                    } else {
+                        d = d << 1;
+                    }
+                }
+                d = d ^ senda;
+                data[i] = d;
+            }
+            break;
+        case 5:
+            for (unsigned int i = 0 ; i < len ; i++) {
+                unsigned char d = data[i];
+                for (unsigned char j = 0 ; j < sendc ; j++) {
+                    if (d & 0x80) {
+                        d = (d << 1) | 0x01;
+                    } else {
+                        d = d << 1;
+                    }
+                }
+                d = d + sendb;
+                d = d ^ senda;
+                data[i] = d;
+            }
+            break;
+        case 6:
+            for (unsigned int i = 0 ; i < len ; i++) {
+                unsigned char d = data[i];
+                for (unsigned char j = 0 ; j < sendc ; j++) {
+                    if (d & 0x80) {
+                        d = (d << 1) | 0x01;
+                    } else {
+                        d = d << 1;
+                    }
+                }
+                d = d ^ senda;
+                d = d + sendb;
+                data[i] = d;
+            }
+            break;
+        case 0:
+        default: return;
     }
 }
 
 void decrypt (struct CLIENTLIST *sourceclient, unsigned char *data, uint32_t len) {
     unsigned char receivecrypt = sourceclient->receivecrypt;
-    unsigned char receivek = sourceclient->receivek;
+    unsigned char receivea = sourceclient->receivea;
     unsigned char receiveb = sourceclient->receiveb;
+    unsigned char receivec = sourceclient->receivec;
     switch (receivecrypt) {
-        case 0:
-            for (uint32_t i = 0 ; i < len ; i++) {
-                data[i] = data[i] - receiveb;
-                data[i] = data[i] ^ receivek;
-            }
-            break;
         case 1:
             for (uint32_t i = 0 ; i < len ; i++) {
-                data[i] = data[i] + receiveb;
-                data[i] = data[i] ^ receivek;
+                unsigned char d = data[i];
+                for (unsigned char j = 0 ; j < receivec ; j++) {
+                    if (d & 0x01) {
+                        d = (d >> 1) | 0x80;
+                    } else {
+                        d = d >> 1;
+                    }
+                }
+                d = d - receiveb;
+                d = d ^ receivea;
+                data[i] = d;
             }
             break;
         case 2:
             for (uint32_t i = 0 ; i < len ; i++) {
-                data[i] = data[i] ^ receivek;
-                data[i] = data[i] - receiveb;
+                unsigned char d = data[i];
+                d = d - receiveb;
+                for (unsigned char j = 0 ; j < receivec ; j++) {
+                    if (d & 0x01) {
+                        d = (d >> 1) | 0x80;
+                    } else {
+                        d = d >> 1;
+                    }
+                }
+                d = d ^ receivea;
+                data[i] = d;
             }
             break;
         case 3:
             for (uint32_t i = 0 ; i < len ; i++) {
-                data[i] = data[i] ^ receivek;
-                data[i] = data[i] + receiveb;
+                unsigned char d = data[i];
+                for (unsigned char j = 0 ; j < receivec ; j++) {
+                    if (d & 0x01) {
+                        d = (d >> 1) | 0x80;
+                    } else {
+                        d = d >> 1;
+                    }
+                }
+                d = d ^ receivea;
+                d = d - receiveb;
+                data[i] = d;
             }
             break;
+        case 4:
+            for (uint32_t i = 0 ; i < len ; i++) {
+                unsigned char d = data[i];
+                d = d ^ receivea;
+                for (unsigned char j = 0 ; j < receivec ; j++) {
+                    if (d & 0x01) {
+                        d = (d >> 1) | 0x80;
+                    } else {
+                        d = d >> 1;
+                    }
+                }
+                d = d - receiveb;
+                data[i] = d;
+            }
+            break;
+        case 5:
+            for (uint32_t i = 0 ; i < len ; i++) {
+                unsigned char d = data[i];
+                d = d ^ receivea;
+                d = d - receiveb;
+                for (unsigned char j = 0 ; j < receivec ; j++) {
+                    if (d & 0x01) {
+                        d = (d >> 1) | 0x80;
+                    } else {
+                        d = d >> 1;
+                    }
+                }
+                data[i] = d;
+            }
+            break;
+        case 6:
+            for (uint32_t i = 0 ; i < len ; i++) {
+                unsigned char d = data[i];
+                d = d - receiveb;
+                d = d ^ receivea;
+                for (unsigned char j = 0 ; j < receivec ; j++) {
+                    if (d & 0x01) {
+                        d = (d >> 1) | 0x80;
+                    } else {
+                        d = d >> 1;
+                    }
+                }
+                data[i] = d;
+            }
+            break;
+        case 0:
+        default: return;
     }
 }
 
@@ -197,15 +338,24 @@ int connect_socketfd (unsigned char *ip, unsigned int port) {
         close(fd);
         return -3;
     }
-    unsigned char data[9+sizeof(password)-1];
+    unsigned char data[21+sizeof(password)-1];
     memset(data, 0, 3);
-    socketclient->receivecrypt = data[3] = 0x03 & rand();
-    socketclient->receivek = data[4] = rand();
-    socketclient->receiveb = data[5] = rand();
-    socketclient->sendcrypt = data[6] = 0x03 & rand();
-    socketclient->sendk = data[7] = rand();
-    socketclient->sendb = data[8] = rand();
-    memcpy(data + 9, password, sizeof(password)-1);
+    if (crypt == 1) {
+        socketclient->receivecrypt = data[3] = (rand() % 6) + 1;
+        socketclient->receivea = data[4] = rand();
+        socketclient->receiveb = data[5] = rand();
+        socketclient->receivec = data[6] = rand() % 8;
+        socketclient->sendcrypt = data[12] = (rand() % 6) + 1;
+        socketclient->senda = data[13] = rand();
+        socketclient->sendb = data[14] = rand();
+        socketclient->sendc = data[15] = rand() % 8;
+    } else {
+        socketclient->receivecrypt = data[3] = 0;
+        socketclient->sendcrypt = data[12] = 0;
+    }
+    printf("receivecrypt:0x%02x,sendcrypt:0x%02x\n", data[3], data[12]);
+    memcpy(data + 21, password, sizeof(password)-1);
+    encrypt(socketclient, data + 21, sizeof(password)-1);
     ssize_t len = write(fd, data, sizeof(data));
     if (len != sizeof(data)) {
         printf("write fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
@@ -218,6 +368,7 @@ int connect_socketfd (unsigned char *ip, unsigned int port) {
         close(fd);
         return -5;
     }
+    decrypt(socketclient, data, 1);
     if (data[0] != 0x01) {
         printf("password check fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
         close(fd);
@@ -499,6 +650,7 @@ int parseargs (int argc, char *argv[]) {
     strcpy(serverip, "192.168.56.101");
     serverport = 3480;
     strcpy(password, "vCIhnEMbk9wgK4uUxCptm4bFxAAkGdTs");
+    crypt = 0;
     for (int i = 1 ; i < argc ; i++) {
         if (!strcmp(argv[i], "-h")) {
             i++;
@@ -517,6 +669,8 @@ int parseargs (int argc, char *argv[]) {
                 return -2;
             }
             strcpy(password, argv[i]);
+        } else if (!strcmp(argv[i], "--encrypt")) {
+            crypt = 1;
         } else {
             printf("build time: %s %s\n", __DATE__, __TIME__);
             printf("-h server ip, not support domain, default is 192.168.56.101\n");

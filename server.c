@@ -39,11 +39,13 @@ struct CLIENTLIST {
     int remainsize; // 不全的数据大小
     int canwrite;
     unsigned char sendcrypt;
-    unsigned char sendk;
+    unsigned char senda;
     unsigned char sendb;
+    unsigned char sendc;
     unsigned char receivecrypt;
-    unsigned char receivek;
+    unsigned char receivea;
     unsigned char receiveb;
+    unsigned char receivec;
     struct CLIENTLIST *hashhead; // 从哈希表中寻找上一个clientlist
     struct CLIENTLIST *hashtail; // 从哈希表中寻找下一个clientlist
     struct CLIENTLIST *head; // 从remainclientlist中寻找下一个可用的clientlist
@@ -95,65 +97,203 @@ int modepoll (struct FDCLIENT *fdclient, int flags) {
 
 void encrypt (struct CLIENTLIST *targetclient, unsigned char *data, unsigned int len) {
     unsigned char sendcrypt = targetclient->sendcrypt;
-    unsigned char sendk = targetclient->sendk;
+    unsigned char senda = targetclient->senda;
     unsigned char sendb = targetclient->sendb;
+    unsigned char sendc = targetclient->sendc;
     switch (sendcrypt) {
-        case 0:
-            for (unsigned int i = 0 ; i < len ; i++) {
-                data[i] = data[i] ^ sendk;
-                data[i] = data[i] + sendb;
-            }
-            break;
         case 1:
             for (unsigned int i = 0 ; i < len ; i++) {
-                data[i] = data[i] ^ sendk;
-                data[i] = data[i] - sendb;
+                unsigned char d = data[i];
+                d = d ^ senda;
+                d = d + sendb;
+                for (unsigned char j = 0 ; j < sendc ; j++) {
+                    if (d & 0x80) {
+                        d = (d << 1) | 0x01;
+                    } else {
+                        d = d << 1;
+                    }
+                }
+                data[i] = d;
             }
             break;
         case 2:
             for (unsigned int i = 0 ; i < len ; i++) {
-                data[i] = data[i] + sendb;
-                data[i] = data[i] ^ sendk;
+                unsigned char d = data[i];
+                d = d ^ senda;
+                for (unsigned char j = 0 ; j < sendc ; j++) {
+                    if (d & 0x80) {
+                        d = (d << 1) | 0x01;
+                    } else {
+                        d = d << 1;
+                    }
+                }
+                d = d + sendb;
+                data[i] = d;
             }
             break;
         case 3:
             for (unsigned int i = 0 ; i < len ; i++) {
-                data[i] = data[i] - sendb;
-                data[i] = data[i] ^ sendk;
+                unsigned char d = data[i];
+                d = d + sendb;
+                d = d ^ senda;
+                for (unsigned char j = 0 ; j < sendc ; j++) {
+                    if (d & 0x80) {
+                        d = (d << 1) | 0x01;
+                    } else {
+                        d = d << 1;
+                    }
+                }
+                data[i] = d;
             }
             break;
+        case 4:
+            for (unsigned int i = 0 ; i < len ; i++) {
+                unsigned char d = data[i];
+                d = d + sendb;
+                for (unsigned char j = 0 ; j < sendc ; j++) {
+                    if (d & 0x80) {
+                        d = (d << 1) | 0x01;
+                    } else {
+                        d = d << 1;
+                    }
+                }
+                d = d ^ senda;
+                data[i] = d;
+            }
+            break;
+        case 5:
+            for (unsigned int i = 0 ; i < len ; i++) {
+                unsigned char d = data[i];
+                for (unsigned char j = 0 ; j < sendc ; j++) {
+                    if (d & 0x80) {
+                        d = (d << 1) | 0x01;
+                    } else {
+                        d = d << 1;
+                    }
+                }
+                d = d + sendb;
+                d = d ^ senda;
+                data[i] = d;
+            }
+            break;
+        case 6:
+            for (unsigned int i = 0 ; i < len ; i++) {
+                unsigned char d = data[i];
+                for (unsigned char j = 0 ; j < sendc ; j++) {
+                    if (d & 0x80) {
+                        d = (d << 1) | 0x01;
+                    } else {
+                        d = d << 1;
+                    }
+                }
+                d = d ^ senda;
+                d = d + sendb;
+                data[i] = d;
+            }
+            break;
+        case 0:
+        default: return;
     }
 }
 
 void decrypt (struct CLIENTLIST *sourceclient, unsigned char *data, uint32_t len) {
     unsigned char receivecrypt = sourceclient->receivecrypt;
-    unsigned char receivek = sourceclient->receivek;
+    unsigned char receivea = sourceclient->receivea;
     unsigned char receiveb = sourceclient->receiveb;
+    unsigned char receivec = sourceclient->receivec;
     switch (receivecrypt) {
-        case 0:
-            for (uint32_t i = 0 ; i < len ; i++) {
-                data[i] = data[i] - receiveb;
-                data[i] = data[i] ^ receivek;
-            }
-            break;
         case 1:
             for (uint32_t i = 0 ; i < len ; i++) {
-                data[i] = data[i] + receiveb;
-                data[i] = data[i] ^ receivek;
+                unsigned char d = data[i];
+                for (unsigned char j = 0 ; j < receivec ; j++) {
+                    if (d & 0x01) {
+                        d = (d >> 1) | 0x80;
+                    } else {
+                        d = d >> 1;
+                    }
+                }
+                d = d - receiveb;
+                d = d ^ receivea;
+                data[i] = d;
             }
             break;
         case 2:
             for (uint32_t i = 0 ; i < len ; i++) {
-                data[i] = data[i] ^ receivek;
-                data[i] = data[i] - receiveb;
+                unsigned char d = data[i];
+                d = d - receiveb;
+                for (unsigned char j = 0 ; j < receivec ; j++) {
+                    if (d & 0x01) {
+                        d = (d >> 1) | 0x80;
+                    } else {
+                        d = d >> 1;
+                    }
+                }
+                d = d ^ receivea;
+                data[i] = d;
             }
             break;
         case 3:
             for (uint32_t i = 0 ; i < len ; i++) {
-                data[i] = data[i] ^ receivek;
-                data[i] = data[i] + receiveb;
+                unsigned char d = data[i];
+                for (unsigned char j = 0 ; j < receivec ; j++) {
+                    if (d & 0x01) {
+                        d = (d >> 1) | 0x80;
+                    } else {
+                        d = d >> 1;
+                    }
+                }
+                d = d ^ receivea;
+                d = d - receiveb;
+                data[i] = d;
             }
             break;
+        case 4:
+            for (uint32_t i = 0 ; i < len ; i++) {
+                unsigned char d = data[i];
+                d = d ^ receivea;
+                for (unsigned char j = 0 ; j < receivec ; j++) {
+                    if (d & 0x01) {
+                        d = (d >> 1) | 0x80;
+                    } else {
+                        d = d >> 1;
+                    }
+                }
+                d = d - receiveb;
+                data[i] = d;
+            }
+            break;
+        case 5:
+            for (uint32_t i = 0 ; i < len ; i++) {
+                unsigned char d = data[i];
+                d = d ^ receivea;
+                d = d - receiveb;
+                for (unsigned char j = 0 ; j < receivec ; j++) {
+                    if (d & 0x01) {
+                        d = (d >> 1) | 0x80;
+                    } else {
+                        d = d >> 1;
+                    }
+                }
+                data[i] = d;
+            }
+            break;
+        case 6:
+            for (uint32_t i = 0 ; i < len ; i++) {
+                unsigned char d = data[i];
+                d = d - receiveb;
+                d = d ^ receivea;
+                for (unsigned char j = 0 ; j < receivec ; j++) {
+                    if (d & 0x01) {
+                        d = (d >> 1) | 0x80;
+                    } else {
+                        d = d >> 1;
+                    }
+                }
+                data[i] = d;
+            }
+            break;
+        case 0:
+        default: return;
     }
 }
 
@@ -568,11 +708,6 @@ int readdata (struct FDCLIENT *fdclient) {
             removeclient(fdclient);
             return -4;
         }
-        if (memcmp(readbuf + 9, password, sizeof(password)-1)) { // 绑定密码错误
-            printf("password check fail, in %s, at %d\n",  __FILE__, __LINE__);
-            removeclient(fdclient);
-            return -5;
-        }
         if (remainclientlisthead) {
             sourceclient = remainclientlisthead;
             remainclientlisthead = remainclientlisthead->tail;
@@ -584,25 +719,14 @@ int readdata (struct FDCLIENT *fdclient) {
                 return -6;
             }
         }
-        if (readbuf[3] >= 4 || readbuf[6] >= 4) {
-            printf("send crypt type or receive crypt type error in %s, at %d\n",  __FILE__, __LINE__);
-            removeclient(fdclient);
-            return -7;
-        }
         sourceclient->sendcrypt = readbuf[3];
-        sourceclient->sendk = readbuf[4];
+        sourceclient->senda = readbuf[4];
         sourceclient->sendb = readbuf[5];
-        sourceclient->receivecrypt = readbuf[6];
-        sourceclient->receivek = readbuf[7];
-        sourceclient->receiveb = readbuf[8];
-        unsigned char data[1];
-        data[0] = 0x01;
-        ssize_t wlen = write(fd, data, sizeof(data));
-        if (wlen != sizeof(data)) {
-            printf("write encrypt data fail, in %s, at %d\n",  __FILE__, __LINE__);
-            removeclient(fdclient);
-            return -8;
-        }
+        sourceclient->sendc = readbuf[6] % 8;
+        sourceclient->receivecrypt = readbuf[12];
+        sourceclient->receivea = readbuf[13];
+        sourceclient->receiveb = readbuf[14];
+        sourceclient->receivec = readbuf[15] % 8;
         sourceclient->fd = fd;
         memset(sourceclient->mac, 0, 6);
         sourceclient->fdclient = fdclient;
@@ -616,9 +740,23 @@ int readdata (struct FDCLIENT *fdclient) {
         sourceclient->tail = clientlisthead;
         clientlisthead = sourceclient;
         fdclient->client = sourceclient;
-        offset += 9 + sizeof(password) - 1; // 绑定包长度
+        decrypt(sourceclient, readbuf + 21, len - 21);
+        if (memcmp(readbuf + 21, password, sizeof(password)-1)) { // 绑定密码错误
+            printf("password check fail, in %s, at %d\n",  __FILE__, __LINE__);
+            removeclient(fdclient);
+            return -5;
+        }
+        unsigned char data[1];
+        data[0] = 0x01;
+        encrypt(sourceclient, data, 1);
+        ssize_t wlen = write(fd, data, sizeof(data));
+        if (wlen != sizeof(data)) {
+            printf("write encrypt data fail, in %s, at %d\n",  __FILE__, __LINE__);
+            removeclient(fdclient);
+            return -8;
+        }
+        offset += 21 + sizeof(password) - 1; // 绑定包长度
         printf("add client success, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
-        decrypt(sourceclient, readbuf + offset, len - offset);
     }
     int32_t totalsize;
     unsigned char *buff;
