@@ -384,12 +384,12 @@ int create_socketfd () {
     sin.sin_addr.s_addr = INADDR_ANY; // 本机任意ip
     sin.sin_port = htons(serverport);
     if (bind(fd, (struct sockaddr*)&sin, sizeof(sin)) < 0) {
-        printf("bind port %d fail, fd:%d, in %s, at %d\n", fd, serverport, __FILE__, __LINE__);
+        printf("bind port %d fail, fd:%d, in %s, at %d\n", serverport, fd, __FILE__, __LINE__);
         close(fd);
         return -2;
     }
     if (listen(fd, MAX_CONNECT) < 0) {
-        printf("listen port %d fail, fd:%d, in %s, at %d\n", fd, serverport, __FILE__, __LINE__);
+        printf("listen port %d fail, fd:%d, in %s, at %d\n", serverport, fd, __FILE__, __LINE__);
         close(fd);
         return -3;
     }
