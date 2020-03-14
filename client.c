@@ -9,7 +9,7 @@
 #include <net/if.h>
 #include <linux/if_tun.h>
 // 包入网络相关的头部
-#include <arpa/inet.h>
+#include <netdb.h>
 #include <netinet/tcp.h>
 #include <sys/epoll.h>
 // 用于生成随机种子
@@ -23,6 +23,7 @@
 #define KEEPINTVL         5  // 如果询问失败，间隔多久再次发出询问数据包
 #define KEEPCNT           3  // 如果询问失败，间隔多久再次发出询问数据包
 #define RETRYINTERVAL     5  // 如果重要链接断掉了，重连间隔时间，单位秒
+#define SUPPORTDOMAIN        // 支持域名访问服务器
 
 struct PACKAGELIST {
     unsigned char data[MTU_SIZE + 18];
@@ -50,7 +51,7 @@ struct CLIENTLIST *tapclient = &tclient;
 struct CLIENTLIST *socketclient = &sclient;
 int epollfd;
 
-unsigned char serverip[16]; // 服务器的地址，不支持域名
+unsigned char serverip[16]; // 服务器的地址
 unsigned int serverport; // 服务器的连接端口
 unsigned char password[33]; // 密码固定为32位
 unsigned char crypt; // 是否加密
@@ -316,27 +317,42 @@ int tap_alloc () {
     return 0;
 }
 
-int connect_socketfd (unsigned char *ip, unsigned int port) {
+int connect_socketfd (unsigned char *host, unsigned int port) {
     struct sockaddr_in sin;
+    memset(&sin, 0, sizeof(struct sockaddr_in));
+    printf("host:%s, port:%d, in %s, at %d\n", host, port, __FILE__, __LINE__);
+    sin.sin_family = AF_INET; // ipv4
+#ifdef SUPPORTDOMAIN
+    struct hostent *ip = gethostbyname(host); // 域名dns解析
+    if(ip == NULL) {
+        printf("get ip by domain error, domain:%s, in %s, at %d\n", host,  __FILE__, __LINE__);
+        return -1;
+    }
+    unsigned char *addr = ip->h_addr_list[0];
+    if (ip->h_addrtype == AF_INET) { // ipv4
+        memcpy(&sin.sin_addr.s_addr, addr, 4);
+    } else if (ip->h_addrtype == AF_INET6) { // ipv6
+        printf("not support ipv6, in %s, at %d\n", host, port, __FILE__, __LINE__);
+        return -2;
+    }
+#else
+    in_addr_t _ip = inet_addr(host); // 服务器ip地址，这里不能输入域名
+    if (_ip == INADDR_NONE) {
+        printf("server ip error, ip:%s, fd:%d, in %s, at %d\n", ip, fd, __FILE__, __LINE__);
+        return -3;
+    }
+    sin.sin_addr.s_addr = _ip;
+#endif
+    sin.sin_port = htons(port);
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) {
         printf("run socket function is fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
-        return -1;
+        return -4;
     }
-    memset(&sin, 0, sizeof(struct sockaddr_in));
-    sin.sin_family = AF_INET; // ipv4
-    in_addr_t _ip = inet_addr(ip); // 服务器ip地址，这里不能输入域名
-    if (_ip == INADDR_NONE) {
-        printf("server ip error, ip:%s, fd:%d, in %s, at %d\n", ip, fd, __FILE__, __LINE__);
-        close(fd);
-        return -2;
-    }
-    sin.sin_addr.s_addr = _ip;
-    sin.sin_port = htons(port);
     if(connect(fd, (struct sockaddr*)&sin, sizeof(sin)) < 0) {
         printf("connect server fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
         close(fd);
-        return -3;
+        return -5;
     }
     unsigned char data[21+sizeof(password)-1];
     memset(data, 0, 3);
@@ -360,55 +376,55 @@ int connect_socketfd (unsigned char *ip, unsigned int port) {
     if (len != sizeof(data)) {
         printf("write fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
         close(fd);
-        return -4;
+        return -6;
     }
     len = read(fd, data, sizeof(data));
     if (len != 1) {
         printf("read fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
         close(fd);
-        return -5;
+        return -7;
     }
     decrypt(socketclient, data, 1);
     if (data[0] != 0x01) {
         printf("password check fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
         close(fd);
-        return -6;
+        return -8;
     }
     if (setnonblocking(fd) < 0) { // 设置为非阻塞IO
         printf("set nonblocking fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
         close(fd);
-        return -7;
+        return -9;
     }
     unsigned int socksval = 1;
     if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (unsigned char*)&socksval, sizeof(socksval))) { // 关闭Nagle协议
         printf("close Nagle protocol fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
         close(fd);
-        return -8;
+        return -10;
     }
 #ifdef KEEPALIVE
     socksval = 1;
     if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, (unsigned char*)&socksval, sizeof(socksval))) { // 启动tcp心跳包
         printf("set socket keepalive fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
         close(fd);
-        return -9;
+        return -11;
     }
     socksval = KEEPIDLE;
     if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, (unsigned char*)&socksval, sizeof(socksval))) { // 设置tcp心跳包参数
         printf("set socket keepidle fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
         close(fd);
-        return -10;
+        return -12;
     }
     socksval = KEEPINTVL;
     if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, (unsigned char*)&socksval, sizeof(socksval))) { // 设置tcp心跳包参数
         printf("set socket keepintvl fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
         close(fd);
-        return -11;
+        return -13;
     }
     socksval = KEEPCNT;
     if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, (unsigned char*)&socksval, sizeof(socksval))) { // 设置tcp心跳包参数
         printf("set socket keepcnt fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
         close(fd);
-        return -12;
+        return -14;
     }
 #endif
     // 修改发送缓冲区大小
@@ -416,20 +432,20 @@ int connect_socketfd (unsigned char *ip, unsigned int port) {
     if (getsockopt(fd, SOL_SOCKET, SO_SNDBUF, (unsigned char*)&socksval, &socksval_len)) {
         printf("get send buffer fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         close(fd);
-        return -13;
+        return -15;
     }
     printf("old send buffer is %d, socksval_len:%d, fd:%d, in %s, at %d\n", socksval, socksval_len, fd,  __FILE__, __LINE__);
     socksval = MAXDATASIZE - MTU_SIZE;
     if (setsockopt(fd, SOL_SOCKET, SO_SNDBUF, (unsigned char*)&socksval, sizeof(socksval))) {
         printf("set send buffer fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         close(fd);
-        return -14;
+        return -16;
     }
     socksval_len = sizeof(socksval);
     if (getsockopt(fd, SOL_SOCKET, SO_SNDBUF, (unsigned char*)&socksval, &socksval_len)) {
         printf("get send buffer fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         close(fd);
-        return -15;
+        return -17;
     }
     printf("new send buffer is %d, socksval_len:%d, fd:%d, in %s, at %d\n", socksval, socksval_len, fd,  __FILE__, __LINE__);
     // 修改接收缓冲区大小
@@ -437,20 +453,20 @@ int connect_socketfd (unsigned char *ip, unsigned int port) {
     if (getsockopt(fd, SOL_SOCKET, SO_RCVBUF, (unsigned char*)&socksval, &socksval_len)) {
         printf("get receive buffer fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         close(fd);
-        return -16;
+        return -18;
     }
     printf("old receive buffer is %d, len:%d, fd:%d, in %s, at %d\n", socksval, socksval_len, fd,  __FILE__, __LINE__);
     socksval = MAXDATASIZE - MTU_SIZE;
     if (setsockopt(fd, SOL_SOCKET, SO_RCVBUF, (unsigned char*)&socksval, sizeof(socksval))) {
         printf("set receive buffer fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         close(fd);
-        return -17;
+        return -19;
     }
     socksval_len = sizeof(socksval);
     if (getsockopt(fd, SOL_SOCKET, SO_RCVBUF, (unsigned char*)&socksval, &socksval_len)) {
         printf("get receive buffer fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         close(fd);
-        return -18;
+        return -20;
     }
     printf("new receive buffer is %d, socksval_len:%d, fd:%d, in %s, at %d\n", socksval, socksval_len, fd,  __FILE__, __LINE__);
     socketclient->fd = fd;
@@ -460,7 +476,7 @@ int connect_socketfd (unsigned char *ip, unsigned int port) {
     if (addtoepoll(socketclient)) {
         printf("tapfd addtoepoll fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         close(fd);
-        return -19;
+        return -21;
     }
     return 0;
 }

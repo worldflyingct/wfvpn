@@ -58,6 +58,7 @@ struct CLIENTLIST *machashlist[65536]; // mac地址的hash表，用于快速找�
 struct CLIENTLIST *tapclient;
 struct FDCLIENT {
     int fd;
+    int watch;
     struct CLIENTLIST *client;
     struct FDCLIENT *tail; // 从remainclientlist中寻找下一个可用的clientlist
 };
@@ -358,6 +359,7 @@ int tap_alloc () {
     }
     tapclient->fdclient = fdclient;
     fdclient->fd = fd;
+    fdclient->watch = 0;
     fdclient->client = tapclient;
     if (addtoepoll(fdclient)) {
         printf("tapfd add to epoll fail, in %s, at %d\n",  __FILE__, __LINE__);
@@ -369,6 +371,7 @@ int tap_alloc () {
         close(fd);
         return -6;
     }
+    fdclient->watch = 1;
     return 0;
 }
 
@@ -405,6 +408,7 @@ int create_socketfd () {
         }
     }
     fdserver->fd = fd;
+    fdserver->watch = 0;
     fdserver->client = NULL;
     if (addtoepoll(fdserver)) {
         printf("serverfd add to epoll fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
@@ -412,6 +416,7 @@ int create_socketfd () {
         remainfdclienthead = fdserver;
         return -6;
     }
+    fdserver->watch = 1;
     return 0;
 }
 
@@ -516,6 +521,7 @@ int addclient (int serverfd) {
         }
     }
     fdclient->fd = fd;
+    fdclient->watch = 0;
     fdclient->client = NULL;
     if (addtoepoll(fdclient)) {
         printf("add to epoll fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
@@ -524,12 +530,20 @@ int addclient (int serverfd) {
         close(fd);
         return -15;
     }
+    fdclient->watch = 1;
     return 0;
 }
 
 int removeclient (struct FDCLIENT *fdclient) {
-    struct epoll_event ev;
-    epoll_ctl(epollfd, EPOLL_CTL_DEL, fdclient->fd, &ev);
+    if (!fdclient->watch) {
+        return 0;
+    }
+    if (epoll_ctl(epollfd, EPOLL_CTL_DEL, fdclient->fd, NULL)) {
+        perror("EPOLL CTL DEL fail");
+        printf("fd:%d, in %s, at %d\n", fdclient->fd,  __FILE__, __LINE__);
+        return -1;
+    }
+    fdclient->watch = 0;
     close(fdclient->fd);
     struct CLIENTLIST *client = fdclient->client;
     if (client) { // 已经注册成功
@@ -942,7 +956,6 @@ int main (int argc, char *argv[]) {
             if (events & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) { // 检测到数据异常
                 printf("connect lose, fd:%d, EPOLLERR:%d, EPOLLHUP:%d, EPOLLRDHUP:%d, in %s, at %d\n", fdclient->fd, events&EPOLLERR ? 1 : 0, events&EPOLLHUP ? 1 : 0, events&EPOLLRDHUP ? 1 : 0, __FILE__, __LINE__);
                 removeclient(fdclient);
-                continue;
             } else if (fdclient == fdserver) {
                 addclient(fdclient->fd);
             } else if (events & EPOLLIN) { // 数据可读
