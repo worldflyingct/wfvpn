@@ -22,7 +22,6 @@
 #define KEEPIDLE          60 // tcp完全没有数据传输的最长间隔为60s，操过60s就要发送询问数据包
 #define KEEPINTVL         5  // 如果询问失败，间隔多久再次发出询问数据包
 #define KEEPCNT           3  // 如果询问失败，间隔多久再次发出询问数据包
-#define RETRYINTERVAL     5  // 如果重要链接断掉了，重连间隔时间，单位秒
 #define SUPPORTDOMAIN        // 支持域名访问服务器
 
 struct PACKAGELIST {
@@ -51,10 +50,11 @@ struct CLIENTLIST *tapclient = &tclient;
 struct CLIENTLIST *socketclient = &sclient;
 int epollfd;
 
-unsigned char serverip[16]; // 服务器的地址
+unsigned char serverip[256]; // 服务器的地址
 unsigned int serverport; // 服务器的连接端口
 unsigned char password[33]; // 密码固定为32位
 unsigned char crypt; // 是否加密
+unsigned char retryinterval; // 是否加密
 
 int setnonblocking (int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
@@ -494,16 +494,14 @@ int removeclient (struct CLIENTLIST *client) {
     }
     if (client == socketclient) { // 常规情况
         do {
-            sleep(RETRYINTERVAL);
+            sleep(retryinterval);
             printf("try connect tcp socket again, in %s, at %d\n", __FILE__, __LINE__);
         }
         while (connect_socketfd(serverip, serverport));
     } else { // 基本不可能情况
-        do {
-            sleep(RETRYINTERVAL);
-            printf("try connect tap driver again, in %s, at %d\n", __FILE__, __LINE__);
-        }
-        while (tap_alloc());
+        printf("errno: %d, exit 0, in %s, at %d\n", errno, __FILE__, __LINE__);
+        perror("tap driver lose");
+        exit(0);
     }
     return 0;
 }
@@ -667,10 +665,11 @@ int parseargs (int argc, char *argv[]) {
     serverport = 3480;
     strcpy(password, "vCIhnEMbk9wgK4uUxCptm4bFxAAkGdTs");
     crypt = 0;
+    retryinterval = 5;
     for (int i = 1 ; i < argc ; i++) {
         if (!strcmp(argv[i], "-h")) {
             i++;
-            if (strlen(argv[i]) >= 16) {
+            if (strlen(argv[i]) >= 255) {
                 printf("server ip too long, in %s, at %d\n",  __FILE__, __LINE__);
                 return -1;
             }
@@ -685,6 +684,9 @@ int parseargs (int argc, char *argv[]) {
                 return -2;
             }
             strcpy(password, argv[i]);
+        } else if (!strcmp(argv[i], "-r")) {
+            i++;
+            retryinterval = atoi(argv[i]);
         } else if (!strcmp(argv[i], "--encrypt")) {
             crypt = 1;
         } else {
@@ -692,6 +694,8 @@ int parseargs (int argc, char *argv[]) {
             printf("-h server ip, not support domain, default is 192.168.56.101\n");
             printf("-p server port, default is 3480\n");
             printf("-k access key, default is vCIhnEMbk9wgK4uUxCptm4bFxAAkGdTs\n");
+            printf("-r retry interval, unit is second, default is 5\n");
+            printf("--encrypt enable crypt\n");
             return -3;
         }
     }

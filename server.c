@@ -21,7 +21,6 @@
 #define KEEPIDLE          60 // tcp完全没有数据传输的最长间隔为60s，操过60s就要发送询问数据包
 #define KEEPINTVL         5  // 如果询问失败，间隔多久再次发出询问数据包
 #define KEEPCNT           3  // 如果询问失败，间隔多久再次发出询问数据包
-#define RETRYINTERVAL     5  // 如果重要链接断掉了，重连间隔时间，单位秒
 
 struct PACKAGELIST {
     unsigned char data[MTU_SIZE + 18];
@@ -539,8 +538,8 @@ int removeclient (struct FDCLIENT *fdclient) {
         return 0;
     }
     if (epoll_ctl(epollfd, EPOLL_CTL_DEL, fdclient->fd, NULL)) {
+        printf("errno: %d, fd:%d, in %s, at %d\n", errno, fdclient->fd,  __FILE__, __LINE__);
         perror("EPOLL CTL DEL fail");
-        printf("fd:%d, in %s, at %d\n", fdclient->fd,  __FILE__, __LINE__);
         return -1;
     }
     fdclient->watch = 0;
@@ -579,11 +578,9 @@ int removeclient (struct FDCLIENT *fdclient) {
     fdclient->tail = remainfdclienthead;
     remainfdclienthead = fdclient;
     if (client == tapclient) { // 基本不可能情况
-        do {
-            sleep(RETRYINTERVAL);
-            printf("try connect tap driver again, in %s, at %d\n", __FILE__, __LINE__);
-        }
-        while(tap_alloc());
+        printf("errno: %d, exit 0, in %s, at %d\n", errno, __FILE__, __LINE__);
+        perror("tap driver lose");
+        exit(0);
     }
     return 0;
 }
