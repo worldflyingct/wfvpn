@@ -37,11 +37,11 @@ struct CLIENTLIST {
     unsigned char remainpackage[MTU_SIZE + 18]; // 自己接收到的数据出现数据不全，将不全的数据存在这里，等待新的数据将其补全
     int remainsize; // 不全的数据大小
     int canwrite;
-    unsigned char sendcrypt;
+    unsigned char sendmcrypt;
     unsigned char senda;
     unsigned char sendb;
     unsigned char sendc;
-    unsigned char receivecrypt;
+    unsigned char receivemcrypt;
     unsigned char receivea;
     unsigned char receiveb;
     unsigned char receivec;
@@ -53,7 +53,7 @@ int epollfd;
 unsigned char serverip[256]; // 服务器的地址
 unsigned int serverport; // 服务器的连接端口
 unsigned char password[33]; // 密码固定为32位
-unsigned char crypt; // 是否加密
+unsigned char mcrypt; // 是否加密
 unsigned char retryinterval; // 是否加密
 
 int setnonblocking (int fd) {
@@ -83,12 +83,12 @@ int modepoll (struct CLIENTLIST *client, int flags) {
     return epoll_ctl(epollfd, EPOLL_CTL_MOD, client->fd, &ev);
 }
 
-void encrypt (struct CLIENTLIST *targetclient, unsigned char *data, unsigned int len) {
-    unsigned char sendcrypt = targetclient->sendcrypt;
+void enmcrypt (struct CLIENTLIST *targetclient, unsigned char *data, unsigned int len) {
+    unsigned char sendmcrypt = targetclient->sendmcrypt;
     unsigned char senda = targetclient->senda;
     unsigned char sendb = targetclient->sendb;
     unsigned char sendc = targetclient->sendc;
-    switch (sendcrypt) {
+    switch (sendmcrypt) {
         case 1:
             for (unsigned int i = 0 ; i < len ; i++) {
                 unsigned char d = data[i];
@@ -184,12 +184,12 @@ void encrypt (struct CLIENTLIST *targetclient, unsigned char *data, unsigned int
     }
 }
 
-void decrypt (struct CLIENTLIST *sourceclient, unsigned char *data, uint32_t len) {
-    unsigned char receivecrypt = sourceclient->receivecrypt;
+void demcrypt (struct CLIENTLIST *sourceclient, unsigned char *data, uint32_t len) {
+    unsigned char receivemcrypt = sourceclient->receivemcrypt;
     unsigned char receivea = sourceclient->receivea;
     unsigned char receiveb = sourceclient->receiveb;
     unsigned char receivec = sourceclient->receivec;
-    switch (receivecrypt) {
+    switch (receivemcrypt) {
         case 1:
             for (uint32_t i = 0 ; i < len ; i++) {
                 unsigned char d = data[i];
@@ -356,22 +356,22 @@ int connect_socketfd (unsigned char *host, unsigned int port) {
     }
     unsigned char data[21+sizeof(password)-1];
     memset(data, 0, 3);
-    if (crypt == 1) {
-        socketclient->receivecrypt = data[3] = (rand() % 6) + 1;
+    if (mcrypt == 1) {
+        socketclient->receivemcrypt = data[3] = (rand() % 6) + 1;
         socketclient->receivea = data[4] = rand();
         socketclient->receiveb = data[5] = rand();
         socketclient->receivec = data[6] = rand() % 8;
-        socketclient->sendcrypt = data[12] = (rand() % 6) + 1;
+        socketclient->sendmcrypt = data[12] = (rand() % 6) + 1;
         socketclient->senda = data[13] = rand();
         socketclient->sendb = data[14] = rand();
         socketclient->sendc = data[15] = rand() % 8;
     } else {
-        socketclient->receivecrypt = data[3] = 0;
-        socketclient->sendcrypt = data[12] = 0;
+        socketclient->receivemcrypt = data[3] = 0;
+        socketclient->sendmcrypt = data[12] = 0;
     }
-    printf("receivecrypt:0x%02x,sendcrypt:0x%02x\n", data[3], data[12]);
+    printf("receivemcrypt:0x%02x,sendmcrypt:0x%02x\n", data[3], data[12]);
     memcpy(data + 21, password, sizeof(password)-1);
-    encrypt(socketclient, data + 21, sizeof(password)-1);
+    enmcrypt(socketclient, data + 21, sizeof(password)-1);
     ssize_t len = write(fd, data, sizeof(data));
     if (len != sizeof(data)) {
         printf("write fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
@@ -384,7 +384,7 @@ int connect_socketfd (unsigned char *host, unsigned int port) {
         close(fd);
         return -7;
     }
-    decrypt(socketclient, data, 1);
+    demcrypt(socketclient, data, 1);
     if (data[0] != 0x01) {
         printf("password check fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
         close(fd);
@@ -583,7 +583,7 @@ int readdata (struct CLIENTLIST *sourceclient) {
             return -2;
         }
         targetclient = tapclient;
-        decrypt(sourceclient, readbuf, len);
+        demcrypt(sourceclient, readbuf, len);
     }
     int32_t offset = 0;
     int32_t totalsize;
@@ -642,7 +642,7 @@ int readdata (struct CLIENTLIST *sourceclient) {
         } else {
             memcpy(package->data, buff + offset, packagesize);
             package->size = packagesize;
-            encrypt(targetclient, package->data, packagesize);
+            enmcrypt(targetclient, package->data, packagesize);
         }
         package->tail = NULL;
         if (targetclient->packagelisthead == NULL) {
@@ -664,7 +664,7 @@ int parseargs (int argc, char *argv[]) {
     strcpy(serverip, "192.168.56.101");
     serverport = 3480;
     strcpy(password, "vCIhnEMbk9wgK4uUxCptm4bFxAAkGdTs");
-    crypt = 0;
+    mcrypt = 0;
     retryinterval = 5;
     for (int i = 1 ; i < argc ; i++) {
         if (!strcmp(argv[i], "-h")) {
@@ -687,15 +687,15 @@ int parseargs (int argc, char *argv[]) {
         } else if (!strcmp(argv[i], "-r")) {
             i++;
             retryinterval = atoi(argv[i]);
-        } else if (!strcmp(argv[i], "--encrypt")) {
-            crypt = 1;
+        } else if (!strcmp(argv[i], "--enmcrypt")) {
+            mcrypt = 1;
         } else {
             printf("build time: %s %s\n", __DATE__, __TIME__);
             printf("-h server ip, not support domain, default is 192.168.56.101\n");
             printf("-p server port, default is 3480\n");
             printf("-k access key, default is vCIhnEMbk9wgK4uUxCptm4bFxAAkGdTs\n");
             printf("-r retry interval, unit is second, default is 5\n");
-            printf("--encrypt enable crypt\n");
+            printf("--enmcrypt enable mcrypt\n");
             return -3;
         }
     }

@@ -37,11 +37,11 @@ struct CLIENTLIST {
     unsigned char remainpackage[MTU_SIZE + 18]; // 自己接收到的数据出现数据不全，将不全的数据存在这里，等待新的数据将其补全
     int remainsize; // 不全的数据大小
     int canwrite;
-    unsigned char sendcrypt;
+    unsigned char sendmcrypt;
     unsigned char senda;
     unsigned char sendb;
     unsigned char sendc;
-    unsigned char receivecrypt;
+    unsigned char receivemcrypt;
     unsigned char receivea;
     unsigned char receiveb;
     unsigned char receivec;
@@ -95,12 +95,12 @@ int modepoll (struct FDCLIENT *fdclient, int flags) {
     return epoll_ctl(epollfd, EPOLL_CTL_MOD, fdclient->fd, &ev);
 }
 
-void encrypt (struct CLIENTLIST *targetclient, unsigned char *data, unsigned int len) {
-    unsigned char sendcrypt = targetclient->sendcrypt;
+void enmcrypt (struct CLIENTLIST *targetclient, unsigned char *data, unsigned int len) {
+    unsigned char sendmcrypt = targetclient->sendmcrypt;
     unsigned char senda = targetclient->senda;
     unsigned char sendb = targetclient->sendb;
     unsigned char sendc = targetclient->sendc;
-    switch (sendcrypt) {
+    switch (sendmcrypt) {
         case 1:
             for (unsigned int i = 0 ; i < len ; i++) {
                 unsigned char d = data[i];
@@ -196,12 +196,12 @@ void encrypt (struct CLIENTLIST *targetclient, unsigned char *data, unsigned int
     }
 }
 
-void decrypt (struct CLIENTLIST *sourceclient, unsigned char *data, uint32_t len) {
-    unsigned char receivecrypt = sourceclient->receivecrypt;
+void demcrypt (struct CLIENTLIST *sourceclient, unsigned char *data, uint32_t len) {
+    unsigned char receivemcrypt = sourceclient->receivemcrypt;
     unsigned char receivea = sourceclient->receivea;
     unsigned char receiveb = sourceclient->receiveb;
     unsigned char receivec = sourceclient->receivec;
-    switch (receivecrypt) {
+    switch (receivemcrypt) {
         case 1:
             for (uint32_t i = 0 ; i < len ; i++) {
                 unsigned char d = data[i];
@@ -659,7 +659,7 @@ struct CLIENTLIST* braodcastdata (struct CLIENTLIST *sourceclient, unsigned char
         } else {
             memcpy(package->data, buff, packagesize);
             package->size = packagesize;
-            encrypt(targetclient, package->data, packagesize);
+            enmcrypt(targetclient, package->data, packagesize);
         }
         package->tail = NULL;
         if (targetclient->packagelisthead == NULL) {
@@ -704,7 +704,7 @@ int readdata (struct FDCLIENT *fdclient) {
             return -2;
         }
         if (sourceclient) {
-            decrypt(sourceclient, readbuf, len);
+            demcrypt(sourceclient, readbuf, len);
         }
     }
     int32_t offset = 0;
@@ -730,11 +730,11 @@ int readdata (struct FDCLIENT *fdclient) {
                 return -6;
             }
         }
-        sourceclient->sendcrypt = readbuf[3];
+        sourceclient->sendmcrypt = readbuf[3];
         sourceclient->senda = readbuf[4];
         sourceclient->sendb = readbuf[5];
         sourceclient->sendc = readbuf[6] % 8;
-        sourceclient->receivecrypt = readbuf[12];
+        sourceclient->receivemcrypt = readbuf[12];
         sourceclient->receivea = readbuf[13];
         sourceclient->receiveb = readbuf[14];
         sourceclient->receivec = readbuf[15] % 8;
@@ -751,7 +751,7 @@ int readdata (struct FDCLIENT *fdclient) {
         sourceclient->tail = clientlisthead;
         clientlisthead = sourceclient;
         fdclient->client = sourceclient;
-        decrypt(sourceclient, readbuf + 21, len - 21);
+        demcrypt(sourceclient, readbuf + 21, len - 21);
         if (memcmp(readbuf + 21, password, sizeof(password)-1)) { // 绑定密码错误
             printf("password check fail, in %s, at %d\n",  __FILE__, __LINE__);
             removeclient(fdclient);
@@ -759,10 +759,10 @@ int readdata (struct FDCLIENT *fdclient) {
         }
         unsigned char data[1];
         data[0] = 0x01;
-        encrypt(sourceclient, data, 1);
+        enmcrypt(sourceclient, data, 1);
         ssize_t wlen = write(fd, data, sizeof(data));
         if (wlen != sizeof(data)) {
-            printf("write encrypt data fail, in %s, at %d\n",  __FILE__, __LINE__);
+            printf("write enmcrypt data fail, in %s, at %d\n",  __FILE__, __LINE__);
             removeclient(fdclient);
             return -8;
         }
@@ -867,7 +867,7 @@ int readdata (struct FDCLIENT *fdclient) {
         } else {
             memcpy(package->data, buff + offset, packagesize);
             package->size = packagesize;
-            encrypt(targetclient, package->data, packagesize);
+            enmcrypt(targetclient, package->data, packagesize);
         }
         package->tail = NULL;
         if (targetclient->packagelisthead == NULL) {
