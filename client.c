@@ -691,7 +691,7 @@ int parseargs (int argc, char *argv[]) {
             mcrypt = 1;
         } else {
             printf("build time: %s %s\n", __DATE__, __TIME__);
-            printf("-h server ip, not support domain, default is 192.168.56.101\n");
+            printf("-h server host, default is 192.168.56.101\n");
             printf("-p server port, default is 3480\n");
             printf("-k access key, default is vCIhnEMbk9wgK4uUxCptm4bFxAAkGdTs\n");
             printf("-r retry interval, unit is second, default is 5\n");
