@@ -19,12 +19,12 @@
 #define MTU_SIZE          1500
 #define KEEPALIVE            // 如果定义了，就是启动心跳包，不定义就不启动，下面3个参数就没有意义。
 #define KEEPIDLE          60 // tcp完全没有数据传输的最长间隔为60s，操过60s就要发送询问数据包
-#define KEEPINTVL         5  // 如果询问失败，间隔多久再次发出询问数据包
-#define KEEPCNT           3  // 如果询问失败，间隔多久再次发出询问数据包
+#define KEEPINTVL         3  // 如果询问失败，间隔多久再次发出询问数据包
+#define KEEPCNT           1  // 连续多少次失败断开连接
 
 struct PACKAGELIST {
     unsigned char data[MTU_SIZE + 18];
-    int size;
+    unsigned int size;
     struct PACKAGELIST *tail;
 };
 struct PACKAGELIST *remainpackagelisthead = NULL;
@@ -406,6 +406,14 @@ int create_socketfd () {
             return -5;
         }
     }
+    int val = 6;
+    if (setsockopt(fd, SOL_TCP, TCP_DEFER_ACCEPT, &val, sizeof(val))) {
+        printf("set fd defer accept fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
+        fdserver->tail = remainfdclienthead;
+        remainfdclienthead = fdserver;
+        close(fd);
+        return -6;
+    }
     fdserver->fd = fd;
     fdserver->watch = 0;
     fdserver->client = NULL;
@@ -413,7 +421,8 @@ int create_socketfd () {
         printf("serverfd add to epoll fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         fdserver->tail = remainfdclienthead;
         remainfdclienthead = fdserver;
-        return -6;
+        close(fd);
+        return -7;
     }
     fdserver->watch = 1;
     return 0;
@@ -447,19 +456,19 @@ int addclient (int serverfd) {
         return -4;
     }
     socksval = KEEPIDLE;
-    if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, (unsigned char*)&socksval, sizeof(socksval))) { // 设置tcp心跳包参数
+    if (setsockopt(fd, SOL_TCP, TCP_KEEPIDLE, (unsigned char*)&socksval, sizeof(socksval))) { // 设置tcp心跳包参数
         printf("set socket keepidle fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
         close(fd);
         return -5;
     }
     socksval = KEEPINTVL;
-    if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, (unsigned char*)&socksval, sizeof(socksval))) { // 设置tcp心跳包参数
+    if (setsockopt(fd, SOL_TCP, TCP_KEEPINTVL, (unsigned char*)&socksval, sizeof(socksval))) { // 设置tcp心跳包参数
         printf("set socket keepintvl fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
         close(fd);
         return -6;
     }
     socksval = KEEPCNT;
-    if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, (unsigned char*)&socksval, sizeof(socksval))) { // 设置tcp心跳包参数
+    if (setsockopt(fd, SOL_TCP, TCP_KEEPCNT, (unsigned char*)&socksval, sizeof(socksval))) { // 设置tcp心跳包参数
         printf("set socket keepcnt fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
         close(fd);
         return -7;
@@ -591,43 +600,48 @@ int writenode (struct CLIENTLIST *writeclient) {
         client->packagelisthead = NULL;
         while (package) {
             ssize_t len = write(client->fd, package->data, package->size);
-            if (len < package->size) { // 缓冲区不足，已无法继续写入数据。
-                if (len < 0) {
-                    if (errno != EAGAIN) {
-                        printf("errno:%d, in %s, at %d\n", errno,  __FILE__, __LINE__);
-                        removeclient(client->fdclient);
-                        break;
-                    }
+            if (len < 0) {
+                client->packagelisthead = package;
+                if (errno != EAGAIN) {
+                    printf("errno:%d, in %s, at %d\n", errno,  __FILE__, __LINE__);
                     if (client == tapclient) {
                         perror("tap write error");
                     } else {
                         perror("socket write error");
                     }
-                    client->packagelisthead = package;
-                    if (client->canwrite) { // 之前缓冲区是可以写入的，现在不行了
-                        if (modepoll(client->fdclient, EPOLLOUT)) { // 监听可写事件
-                            printf("modepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
-                            break;
-                        }
-                        client->canwrite = 0;
-                    }
+                    removeclient(client->fdclient);
                     break;
                 }
-                int size = package->size - len;
+                if (client->canwrite) { // 之前缓冲区是可以写入的，现在不行了
+                    if (modepoll(client->fdclient, EPOLLOUT)) { // 监听可写事件
+                        printf("modepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
+                        removeclient(client->fdclient);
+                        break;
+                    }
+                    client->canwrite = 0;
+                }
+                break;
+            }
+            if (len < package->size) { // 缓冲区不足，已无法继续写入数据。
+                unsigned int size = package->size - len;
                 memcpy(package->data, package->data + len, size);
                 package->size = size;
                 client->packagelisthead = package;
                 if (client->canwrite) { // 之前缓冲区是可以写入的，现在不行了
                     if (modepoll(client->fdclient, EPOLLOUT)) { // 监听可写事件
                         printf("modepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
+                        removeclient(client->fdclient);
                         break;
                     }
                     client->canwrite = 0;
                 }
                 break;
-            } else if (client->canwrite == 0) { // 缓冲区尚有空间，并且之前已经提示不足
+            }
+            if (client->canwrite == 0) { // 缓冲区尚有空间，并且之前已经提示不足
                 if (modepoll(client->fdclient, 0)) { // 取消监听可写事件
                     printf("modepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
+                    client->packagelisthead = package;
+                    removeclient(client->fdclient);
                     break;
                 }
                 client->canwrite = 1;
