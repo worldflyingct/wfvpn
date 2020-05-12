@@ -54,7 +54,7 @@ unsigned char serverip[256]; // 服务器的地址
 unsigned int serverport; // 服务器的连接端口
 unsigned char password[33]; // 密码固定为32位
 unsigned char mcrypt; // 是否加密
-unsigned char retryinterval; // 是否加密
+unsigned char retryinterval; // 恢复时间
 
 int setnonblocking (int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
@@ -513,6 +513,10 @@ int writenode (struct CLIENTLIST *client) {
         ssize_t len = write(client->fd, package->data, package->size);
         if (len < package->size) { // 缓冲区不足，已无法继续写入数据。
             if (len < 0) {
+                if (errno != EAGAIN) {
+                    removeclient(client);
+                    return -1;
+                }
                 printf("errno:%d, in %s, at %d\n", errno,  __FILE__, __LINE__);
                 if (client == tapclient) {
                     perror("tap write error");
@@ -520,9 +524,12 @@ int writenode (struct CLIENTLIST *client) {
                     perror("socket write error");
                 }
                 client->packagelisthead = package;
-                if (errno == 104) {
-                    removeclient(client);
-                    return -1;
+                if (client->canwrite) { // 之前缓冲区是可以写入的，现在不行了
+                    if (modepoll(client, EPOLLOUT)) { // 监听可写事件
+                        printf("modepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
+                        break;
+                    }
+                    client->canwrite = 0;
                 }
                 break;
             }
@@ -565,9 +572,11 @@ int readdata (struct CLIENTLIST *sourceclient) {
     if (sourceclient == tapclient) { // tap驱动，原始数据，需要自己额外添加数据包长度。
         len = read(fd, readbuf + 2, MAXDATASIZE); // 这里最大只可能是1518
         if (len < 0) {
-            printf("errno:%d, in %s, at %d\n", errno,  __FILE__, __LINE__);
-            perror("tap read error");
-            removeclient(sourceclient);
+            if (errno != EAGAIN) {
+                printf("errno:%d, in %s, at %d\n", errno,  __FILE__, __LINE__);
+                perror("tap read error");
+                removeclient(sourceclient);
+            }
             return -1;
         }
         readbuf[0] = len >> 8;
@@ -577,16 +586,18 @@ int readdata (struct CLIENTLIST *sourceclient) {
     } else { // 网络套接字。
         len = read(fd, readbuf, MAXDATASIZE);
         if (len < 0) {
-            printf("errno:%d, in %s, at %d\n", errno,  __FILE__, __LINE__);
-            perror("socket read error");
-            removeclient(sourceclient);
+            if (errno != EAGAIN) {
+                printf("errno:%d, in %s, at %d\n", errno,  __FILE__, __LINE__);
+                perror("socket read error");
+                removeclient(sourceclient);
+            }
             return -2;
         }
         targetclient = tapclient;
         demcrypt(sourceclient, readbuf, len);
     }
-    int32_t offset = 0;
-    int32_t totalsize;
+    unsigned int offset = 0;
+    unsigned int totalsize;
     unsigned char *buff;
     if (sourceclient->remainsize > 0) {
         totalsize = sourceclient->remainsize + len;
@@ -617,7 +628,7 @@ int readdata (struct CLIENTLIST *sourceclient) {
             sourceclient->remainsize = remainsize;
             break;
         }
-        int packagesize = 256*buff[offset] + buff[offset+1] + 2; // 当前数据帧大小
+        unsigned int packagesize = 256*buff[offset] + buff[offset+1] + 2; // 当前数据帧大小
         if (offset + packagesize > totalsize) {
             int remainsize = totalsize - offset;
             memcpy(sourceclient->remainpackage, buff + offset, remainsize);

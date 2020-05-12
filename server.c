@@ -35,7 +35,7 @@ struct CLIENTLIST {
     struct PACKAGELIST *packagelisthead; // 发给自己这个端口的数据包列表头部
     struct PACKAGELIST *packagelisttail; // 发给自己这个端口的数据包列表尾部
     unsigned char remainpackage[MTU_SIZE + 18]; // 自己接收到的数据出现数据不全，将不全的数据存在这里，等待新的数据将其补全
-    int remainsize; // 不全的数据大小
+    unsigned int remainsize; // 不全的数据大小
     int canwrite;
     unsigned char sendmcrypt;
     unsigned char senda;
@@ -593,23 +593,28 @@ int writenode (struct CLIENTLIST *writeclient) {
             ssize_t len = write(client->fd, package->data, package->size);
             if (len < package->size) { // 缓冲区不足，已无法继续写入数据。
                 if (len < 0) {
-                    printf("errno:%d, in %s, at %d\n", errno,  __FILE__, __LINE__);
+                    if (errno != EAGAIN) {
+                        printf("errno:%d, in %s, at %d\n", errno,  __FILE__, __LINE__);
+                        removeclient(client->fdclient);
+                        break;
+                    }
                     if (client == tapclient) {
                         perror("tap write error");
                     } else {
                         perror("socket write error");
                     }
                     client->packagelisthead = package;
-                    if (errno == 104) {
-                        removeclient(client->fdclient);
-                        return -1;
+                    if (client->canwrite) { // 之前缓冲区是可以写入的，现在不行了
+                        if (modepoll(client->fdclient, EPOLLOUT)) { // 监听可写事件
+                            printf("modepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
+                            break;
+                        }
+                        client->canwrite = 0;
                     }
                     break;
                 }
                 int size = package->size - len;
-                unsigned char tmpdata[MTU_SIZE + 18];
-                memcpy(tmpdata, package->data + len, size);
-                memcpy(package->data, tmpdata, size);
+                memcpy(package->data, package->data + len, size);
                 package->size = size;
                 client->packagelisthead = package;
                 if (client->canwrite) { // 之前缓冲区是可以写入的，现在不行了
@@ -687,9 +692,11 @@ int readdata (struct FDCLIENT *fdclient) {
     if (sourceclient == tapclient) { // tap驱动，原始数据，需要自己额外添加数据包长度。
         len = read(fd, readbuf + 2, MAXDATASIZE); // 这里最大只可能是1518
         if (len < 0) {
-            printf("errno:%d, in %s, at %d\n", errno,  __FILE__, __LINE__);
-            perror("tap read error");
-            removeclient(fdclient);
+            if (errno != EAGAIN) {
+                printf("errno:%d, in %s, at %d\n", errno,  __FILE__, __LINE__);
+                perror("tap read error");
+                removeclient(fdclient);
+            }
             return -1;
         }
         readbuf[0] = len >> 8;
@@ -698,16 +705,18 @@ int readdata (struct FDCLIENT *fdclient) {
     } else { // 网络套接字。
         len = read(fd, readbuf, MAXDATASIZE);
         if (len < 0) {
-            printf("errno:%d, in %s, at %d\n", errno,  __FILE__, __LINE__);
-            perror("socket read error");
-            removeclient(fdclient);
+            if (errno != EAGAIN) {
+                printf("errno:%d, in %s, at %d\n", errno,  __FILE__, __LINE__);
+                perror("socket read error");
+                removeclient(fdclient);
+            }
             return -2;
         }
         if (sourceclient) {
             demcrypt(sourceclient, readbuf, len);
         }
     }
-    int32_t offset = 0;
+    unsigned int offset = 0;
     if (sourceclient == NULL) { // 用户没有找到
         if (len < 9 + sizeof(password) - 1) {
             printf("len abnormal, in %s, at %d\n",  __FILE__, __LINE__);
@@ -769,7 +778,7 @@ int readdata (struct FDCLIENT *fdclient) {
         offset += 21 + sizeof(password) - 1; // 绑定包长度
         printf("add client success, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
     }
-    int32_t totalsize;
+    unsigned int totalsize;
     unsigned char *buff;
     if (sourceclient->remainsize > 0) {
         totalsize = sourceclient->remainsize + len;
@@ -800,7 +809,7 @@ int readdata (struct FDCLIENT *fdclient) {
             sourceclient->remainsize = remainsize;
             break;
         }
-        int packagesize = 256 * buff[offset] + buff[offset+1] + 2; // 当前数据帧大小
+        unsigned int packagesize = 256 * buff[offset] + buff[offset+1] + 2; // 当前数据帧大小
         if (offset + packagesize > totalsize) {
             int remainsize = totalsize - offset;
             memcpy(sourceclient->remainpackage, buff + offset, remainsize);
