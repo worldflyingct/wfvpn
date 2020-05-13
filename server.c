@@ -406,14 +406,6 @@ int create_socketfd () {
             return -5;
         }
     }
-    int val = 6;
-    if (setsockopt(fd, SOL_TCP, TCP_DEFER_ACCEPT, &val, sizeof(val))) {
-        printf("set fd defer accept fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
-        fdserver->tail = remainfdclienthead;
-        remainfdclienthead = fdserver;
-        close(fd);
-        return -6;
-    }
     fdserver->fd = fd;
     fdserver->watch = 0;
     fdserver->client = NULL;
@@ -422,7 +414,7 @@ int create_socketfd () {
         fdserver->tail = remainfdclienthead;
         remainfdclienthead = fdserver;
         close(fd);
-        return -7;
+        return -6;
     }
     fdserver->watch = 1;
     return 0;
