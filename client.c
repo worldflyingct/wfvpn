@@ -239,7 +239,7 @@ int connect_socketfd (unsigned char *host, unsigned int port) {
     }
 #endif
     unsigned char data[21+sizeof(password)-1];
-    memset(data, 0, 3);
+    memset(data, 0, sizeof(data));
     memcpy(data + 21, password, sizeof(password)-1);
 #ifdef   USETLS
     ssize_t len = SSL_write(tls, data, sizeof(data));
