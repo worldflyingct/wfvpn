@@ -12,8 +12,6 @@
 #include <netdb.h>
 #include <netinet/tcp.h>
 #include <sys/epoll.h>
-// 用于生成随机种子
-#include <time.h>
 
 #define MAXDATASIZE       2*1024*1024
 #define MAX_EVENT         1024
@@ -23,6 +21,12 @@
 #define KEEPINTVL         3  // 如果询问失败，间隔多久再次发出询问数据包
 #define KEEPCNT           1  // 连续多少次失败断开连接
 #define SUPPORTDOMAIN        // 支持域名访问服务器
+// #define USETLS               // 使用TLS加密
+
+#ifdef   USETLS
+#include <openssl/ssl.h>
+SSL_CTX *ctx;
+#endif
 
 struct PACKAGELIST {
     unsigned char data[MTU_SIZE + 18];
@@ -31,20 +35,15 @@ struct PACKAGELIST {
 };
 struct PACKAGELIST *remainpackagelisthead = NULL;
 struct CLIENTLIST {
-    int fd; // 与fdclient中的fd意义一样，只是为了方便使用而已
+    int fd;
+#ifdef   USETLS
+    SSL *tls;
+#endif
     struct PACKAGELIST *packagelisthead; // 发给自己这个端口的数据包列表头部
     struct PACKAGELIST *packagelisttail; // 发给自己这个端口的数据包列表尾部
     unsigned char remainpackage[MTU_SIZE + 18]; // 自己接收到的数据出现数据不全，将不全的数据存在这里，等待新的数据将其补全
     unsigned int remainsize; // 不全的数据大小
     int canwrite;
-    unsigned char sendmcrypt;
-    unsigned char senda;
-    unsigned char sendb;
-    unsigned char sendc;
-    unsigned char receivemcrypt;
-    unsigned char receivea;
-    unsigned char receiveb;
-    unsigned char receivec;
 } tclient, sclient;
 struct CLIENTLIST *tapclient = &tclient;
 struct CLIENTLIST *socketclient = &sclient;
@@ -53,7 +52,6 @@ int epollfd;
 unsigned char serverip[256]; // 服务器的地址
 unsigned int serverport; // 服务器的连接端口
 unsigned char password[33]; // 密码固定为32位
-unsigned char mcrypt; // 是否加密
 unsigned char retryinterval; // 恢复时间
 
 int setnonblocking (int fd) {
@@ -83,208 +81,6 @@ int modepoll (struct CLIENTLIST *client, int flags) {
     return epoll_ctl(epollfd, EPOLL_CTL_MOD, client->fd, &ev);
 }
 
-void enmcrypt (struct CLIENTLIST *targetclient, unsigned char *data, unsigned int len) {
-    unsigned char sendmcrypt = targetclient->sendmcrypt;
-    unsigned char senda = targetclient->senda;
-    unsigned char sendb = targetclient->sendb;
-    unsigned char sendc = targetclient->sendc;
-    switch (sendmcrypt) {
-        case 1:
-            for (unsigned int i = 0 ; i < len ; i++) {
-                unsigned char d = data[i];
-                d = d ^ senda;
-                d = d + sendb;
-                for (unsigned char j = 0 ; j < sendc ; j++) {
-                    if (d & 0x80) {
-                        d = (d << 1) | 0x01;
-                    } else {
-                        d = d << 1;
-                    }
-                }
-                data[i] = d;
-            }
-            break;
-        case 2:
-            for (unsigned int i = 0 ; i < len ; i++) {
-                unsigned char d = data[i];
-                d = d ^ senda;
-                for (unsigned char j = 0 ; j < sendc ; j++) {
-                    if (d & 0x80) {
-                        d = (d << 1) | 0x01;
-                    } else {
-                        d = d << 1;
-                    }
-                }
-                d = d + sendb;
-                data[i] = d;
-            }
-            break;
-        case 3:
-            for (unsigned int i = 0 ; i < len ; i++) {
-                unsigned char d = data[i];
-                d = d + sendb;
-                d = d ^ senda;
-                for (unsigned char j = 0 ; j < sendc ; j++) {
-                    if (d & 0x80) {
-                        d = (d << 1) | 0x01;
-                    } else {
-                        d = d << 1;
-                    }
-                }
-                data[i] = d;
-            }
-            break;
-        case 4:
-            for (unsigned int i = 0 ; i < len ; i++) {
-                unsigned char d = data[i];
-                d = d + sendb;
-                for (unsigned char j = 0 ; j < sendc ; j++) {
-                    if (d & 0x80) {
-                        d = (d << 1) | 0x01;
-                    } else {
-                        d = d << 1;
-                    }
-                }
-                d = d ^ senda;
-                data[i] = d;
-            }
-            break;
-        case 5:
-            for (unsigned int i = 0 ; i < len ; i++) {
-                unsigned char d = data[i];
-                for (unsigned char j = 0 ; j < sendc ; j++) {
-                    if (d & 0x80) {
-                        d = (d << 1) | 0x01;
-                    } else {
-                        d = d << 1;
-                    }
-                }
-                d = d + sendb;
-                d = d ^ senda;
-                data[i] = d;
-            }
-            break;
-        case 6:
-            for (unsigned int i = 0 ; i < len ; i++) {
-                unsigned char d = data[i];
-                for (unsigned char j = 0 ; j < sendc ; j++) {
-                    if (d & 0x80) {
-                        d = (d << 1) | 0x01;
-                    } else {
-                        d = d << 1;
-                    }
-                }
-                d = d ^ senda;
-                d = d + sendb;
-                data[i] = d;
-            }
-            break;
-        case 0:
-        default: return;
-    }
-}
-
-void demcrypt (struct CLIENTLIST *sourceclient, unsigned char *data, uint32_t len) {
-    unsigned char receivemcrypt = sourceclient->receivemcrypt;
-    unsigned char receivea = sourceclient->receivea;
-    unsigned char receiveb = sourceclient->receiveb;
-    unsigned char receivec = sourceclient->receivec;
-    switch (receivemcrypt) {
-        case 1:
-            for (uint32_t i = 0 ; i < len ; i++) {
-                unsigned char d = data[i];
-                for (unsigned char j = 0 ; j < receivec ; j++) {
-                    if (d & 0x01) {
-                        d = (d >> 1) | 0x80;
-                    } else {
-                        d = d >> 1;
-                    }
-                }
-                d = d - receiveb;
-                d = d ^ receivea;
-                data[i] = d;
-            }
-            break;
-        case 2:
-            for (uint32_t i = 0 ; i < len ; i++) {
-                unsigned char d = data[i];
-                d = d - receiveb;
-                for (unsigned char j = 0 ; j < receivec ; j++) {
-                    if (d & 0x01) {
-                        d = (d >> 1) | 0x80;
-                    } else {
-                        d = d >> 1;
-                    }
-                }
-                d = d ^ receivea;
-                data[i] = d;
-            }
-            break;
-        case 3:
-            for (uint32_t i = 0 ; i < len ; i++) {
-                unsigned char d = data[i];
-                for (unsigned char j = 0 ; j < receivec ; j++) {
-                    if (d & 0x01) {
-                        d = (d >> 1) | 0x80;
-                    } else {
-                        d = d >> 1;
-                    }
-                }
-                d = d ^ receivea;
-                d = d - receiveb;
-                data[i] = d;
-            }
-            break;
-        case 4:
-            for (uint32_t i = 0 ; i < len ; i++) {
-                unsigned char d = data[i];
-                d = d ^ receivea;
-                for (unsigned char j = 0 ; j < receivec ; j++) {
-                    if (d & 0x01) {
-                        d = (d >> 1) | 0x80;
-                    } else {
-                        d = d >> 1;
-                    }
-                }
-                d = d - receiveb;
-                data[i] = d;
-            }
-            break;
-        case 5:
-            for (uint32_t i = 0 ; i < len ; i++) {
-                unsigned char d = data[i];
-                d = d ^ receivea;
-                d = d - receiveb;
-                for (unsigned char j = 0 ; j < receivec ; j++) {
-                    if (d & 0x01) {
-                        d = (d >> 1) | 0x80;
-                    } else {
-                        d = d >> 1;
-                    }
-                }
-                data[i] = d;
-            }
-            break;
-        case 6:
-            for (uint32_t i = 0 ; i < len ; i++) {
-                unsigned char d = data[i];
-                d = d - receiveb;
-                d = d ^ receivea;
-                for (unsigned char j = 0 ; j < receivec ; j++) {
-                    if (d & 0x01) {
-                        d = (d >> 1) | 0x80;
-                    } else {
-                        d = d >> 1;
-                    }
-                }
-                data[i] = d;
-            }
-            break;
-        case 0:
-        default: return;
-    }
-}
-
 int tap_alloc () {
     int fd = open("/dev/net/tun", O_RDWR);
     if (fd < 0) {
@@ -306,6 +102,9 @@ int tap_alloc () {
     }
     printf("tap device name is %s, in %s, at %d\n", ifr.ifr_name, __FILE__, __LINE__);
     tapclient->fd = fd;
+#ifdef   USETLS
+    tapclient->tls = NULL;
+#endif
     tapclient->packagelisthead = NULL;
     tapclient->remainsize = 0;
     tapclient->canwrite = 1;
@@ -354,77 +153,36 @@ int connect_socketfd (unsigned char *host, unsigned int port) {
         close(fd);
         return -5;
     }
-    unsigned char data[21+sizeof(password)-1];
-    memset(data, 0, 3);
-    if (mcrypt == 1) {
-        socketclient->receivemcrypt = data[3] = (rand() % 6) + 1;
-        socketclient->receivea = data[4] = rand();
-        socketclient->receiveb = data[5] = rand();
-        socketclient->receivec = data[6] = rand() % 8;
-        socketclient->sendmcrypt = data[12] = (rand() % 6) + 1;
-        socketclient->senda = data[13] = rand();
-        socketclient->sendb = data[14] = rand();
-        socketclient->sendc = data[15] = rand() % 8;
-    } else {
-        socketclient->receivemcrypt = data[3] = 0;
-        socketclient->sendmcrypt = data[12] = 0;
-    }
-    printf("receivemcrypt:0x%02x, sendmcrypt:0x%02x\n", data[3], data[12]);
-    memcpy(data + 21, password, sizeof(password)-1);
-    enmcrypt(socketclient, data + 21, sizeof(password)-1);
-    ssize_t len = write(fd, data, sizeof(data));
-    if (len != sizeof(data)) {
-        printf("write fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
-        close(fd);
-        return -6;
-    }
-    len = read(fd, data, sizeof(data));
-    if (len != 1) {
-        printf("read fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
-        close(fd);
-        return -7;
-    }
-    demcrypt(socketclient, data, 1);
-    if (data[0] != 0x01) {
-        printf("password check fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
-        close(fd);
-        return -8;
-    }
-    if (setnonblocking(fd) < 0) { // 设置为非阻塞IO
-        printf("set nonblocking fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
-        close(fd);
-        return -9;
-    }
     unsigned int socksval = 1;
     if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (unsigned char*)&socksval, sizeof(socksval))) { // 关闭Nagle协议
         printf("close Nagle protocol fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
         close(fd);
-        return -10;
+        return -6;
     }
 #ifdef KEEPALIVE
     socksval = 1;
     if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, (unsigned char*)&socksval, sizeof(socksval))) { // 启动tcp心跳包
         printf("set socket keepalive fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
         close(fd);
-        return -11;
+        return -7;
     }
     socksval = KEEPIDLE;
     if (setsockopt(fd, SOL_TCP, TCP_KEEPIDLE, (unsigned char*)&socksval, sizeof(socksval))) { // 设置tcp心跳包参数
         printf("set socket keepidle fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
         close(fd);
-        return -12;
+        return -8;
     }
     socksval = KEEPINTVL;
     if (setsockopt(fd, SOL_TCP, TCP_KEEPINTVL, (unsigned char*)&socksval, sizeof(socksval))) { // 设置tcp心跳包参数
         printf("set socket keepintvl fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
         close(fd);
-        return -13;
+        return -9;
     }
     socksval = KEEPCNT;
     if (setsockopt(fd, SOL_TCP, TCP_KEEPCNT, (unsigned char*)&socksval, sizeof(socksval))) { // 设置tcp心跳包参数
         printf("set socket keepcnt fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
         close(fd);
-        return -14;
+        return -10;
     }
 #endif
     // 修改发送缓冲区大小
@@ -432,20 +190,20 @@ int connect_socketfd (unsigned char *host, unsigned int port) {
     if (getsockopt(fd, SOL_SOCKET, SO_SNDBUF, (unsigned char*)&socksval, &socksval_len)) {
         printf("get send buffer fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         close(fd);
-        return -15;
+        return -11;
     }
     printf("old send buffer is %d, socksval_len:%d, fd:%d, in %s, at %d\n", socksval, socksval_len, fd,  __FILE__, __LINE__);
     socksval = MAXDATASIZE - MTU_SIZE;
     if (setsockopt(fd, SOL_SOCKET, SO_SNDBUF, (unsigned char*)&socksval, sizeof(socksval))) {
         printf("set send buffer fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         close(fd);
-        return -16;
+        return -12;
     }
     socksval_len = sizeof(socksval);
     if (getsockopt(fd, SOL_SOCKET, SO_SNDBUF, (unsigned char*)&socksval, &socksval_len)) {
         printf("get send buffer fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         close(fd);
-        return -17;
+        return -13;
     }
     printf("new send buffer is %d, socksval_len:%d, fd:%d, in %s, at %d\n", socksval, socksval_len, fd,  __FILE__, __LINE__);
     // 修改接收缓冲区大小
@@ -453,30 +211,97 @@ int connect_socketfd (unsigned char *host, unsigned int port) {
     if (getsockopt(fd, SOL_SOCKET, SO_RCVBUF, (unsigned char*)&socksval, &socksval_len)) {
         printf("get receive buffer fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         close(fd);
-        return -18;
+        return -14;
     }
     printf("old receive buffer is %d, len:%d, fd:%d, in %s, at %d\n", socksval, socksval_len, fd,  __FILE__, __LINE__);
     socksval = MAXDATASIZE - MTU_SIZE;
     if (setsockopt(fd, SOL_SOCKET, SO_RCVBUF, (unsigned char*)&socksval, sizeof(socksval))) {
         printf("set receive buffer fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         close(fd);
-        return -19;
+        return -15;
     }
     socksval_len = sizeof(socksval);
     if (getsockopt(fd, SOL_SOCKET, SO_RCVBUF, (unsigned char*)&socksval, &socksval_len)) {
         printf("get receive buffer fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         close(fd);
-        return -20;
+        return -16;
     }
     printf("new receive buffer is %d, socksval_len:%d, fd:%d, in %s, at %d\n", socksval, socksval_len, fd,  __FILE__, __LINE__);
+#ifdef   USETLS
+    SSL *tls = SSL_new(ctx);
+    SSL_set_fd(tls, fd);
+    if(SSL_connect(tls) == -1) {
+        printf("ssl connect error");
+        SSL_shutdown(tls);
+        SSL_free(tls);
+        close(fd);
+        return -17;
+    }
+#endif
+    unsigned char data[21+sizeof(password)-1];
+    memset(data, 0, 3);
+    memcpy(data + 21, password, sizeof(password)-1);
+#ifdef   USETLS
+    ssize_t len = SSL_write(tls, data, sizeof(data));
+#else
+    ssize_t len = write(fd, data, sizeof(data));
+#endif
+    if (len != sizeof(data)) {
+        printf("write fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
+#ifdef   USETLS
+        SSL_shutdown(tls);
+        SSL_free(tls);
+#endif
+        close(fd);
+        return -18;
+    }
+#ifdef   USETLS
+    len = SSL_read(tls, data, sizeof(data));
+#else
+    len = read(fd, data, sizeof(data));
+#endif
+    if (len != 1) {
+        printf("read fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
+#ifdef   USETLS
+        SSL_shutdown(tls);
+        SSL_free(tls);
+#endif
+        close(fd);
+        return -19;
+    }
+    if (data[0] != 0x01) {
+        printf("password check fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
+#ifdef   USETLS
+        SSL_shutdown(tls);
+        SSL_free(tls);
+#endif
+        close(fd);
+        return -20;
+    }
+    if (setnonblocking(fd) < 0) { // 设置为非阻塞IO
+        printf("set nonblocking fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
+#ifdef   USETLS
+        SSL_shutdown(tls);
+        SSL_free(tls);
+#endif
+        close(fd);
+        return -21;
+    }
     socketclient->fd = fd;
+#ifdef   USETLS
+    socketclient->tls = tls;
+#endif
     socketclient->packagelisthead = NULL;
     socketclient->remainsize = 0;
     socketclient->canwrite = 1;
     if (addtoepoll(socketclient)) {
         printf("tapfd addtoepoll fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
+#ifdef   USETLS
+        SSL_shutdown(tls);
+        SSL_free(tls);
+#endif
         close(fd);
-        return -21;
+        return -22;
     }
     return 0;
 }
@@ -484,6 +309,12 @@ int connect_socketfd (unsigned char *host, unsigned int port) {
 int removeclient (struct CLIENTLIST *client) {
     struct epoll_event ev;
     epoll_ctl(epollfd, EPOLL_CTL_DEL, client->fd, &ev);
+#ifdef   USETLS
+    if (client->tls) {
+        SSL_shutdown(client->tls);
+        SSL_free(client->tls);
+    }
+#endif
     close(client->fd);
     struct PACKAGELIST *package = client->packagelisthead;
     while (package) {
@@ -510,7 +341,11 @@ int writenode (struct CLIENTLIST *client) {
     struct PACKAGELIST *package = client->packagelisthead;
     client->packagelisthead = NULL;
     while (package) {
+#ifdef   USETLS
+        ssize_t len = SSL_write(client->tls, package->data, package->size);
+#else
         ssize_t len = write(client->fd, package->data, package->size);
+#endif
         if (len < 0) {
             client->packagelisthead = package;
             if (errno != EAGAIN) {
@@ -569,11 +404,10 @@ int readdata (struct CLIENTLIST *sourceclient) {
     unsigned char readbuf[MAXDATASIZE]; // 这里使用static关键词是为了将数据存储与数据段，减小对栈空间的压力。
     static unsigned char *readbuff = NULL; // 这里是用于存储全部的需要写入的数据buf，
     static int32_t maxtotalsize = 0;
-    int fd = sourceclient->fd;
     struct CLIENTLIST *targetclient;
     ssize_t len;
     if (sourceclient == tapclient) { // tap驱动，原始数据，需要自己额外添加数据包长度。
-        len = read(fd, readbuf + 2, MAXDATASIZE); // 这里最大只可能是1518
+        len = read(sourceclient->fd, readbuf + 2, MAXDATASIZE); // 这里最大只可能是1518
         if (len < 0) {
             if (errno != EAGAIN) {
                 printf("errno:%d, in %s, at %d\n", errno,  __FILE__, __LINE__);
@@ -587,7 +421,11 @@ int readdata (struct CLIENTLIST *sourceclient) {
         len += 2;
         targetclient = socketclient;
     } else { // 网络套接字。
-        len = read(fd, readbuf, MAXDATASIZE);
+#ifdef   USETLS
+        len = SSL_read(sourceclient->tls, readbuf, MAXDATASIZE);
+#else
+        len = read(sourceclient->fd, readbuf, MAXDATASIZE);
+#endif
         if (len < 0) {
             if (errno != EAGAIN) {
                 printf("errno:%d, in %s, at %d\n", errno,  __FILE__, __LINE__);
@@ -597,7 +435,6 @@ int readdata (struct CLIENTLIST *sourceclient) {
             return -2;
         }
         targetclient = tapclient;
-        demcrypt(sourceclient, readbuf, len);
     }
     unsigned int offset = 0;
     unsigned int totalsize;
@@ -656,7 +493,6 @@ int readdata (struct CLIENTLIST *sourceclient) {
         } else {
             memcpy(package->data, buff + offset, packagesize);
             package->size = packagesize;
-            enmcrypt(targetclient, package->data, packagesize);
         }
         package->tail = NULL;
         if (targetclient->packagelisthead == NULL) {
@@ -678,7 +514,6 @@ int parseargs (int argc, char *argv[]) {
     strcpy(serverip, "192.168.56.101");
     serverport = 3480;
     strcpy(password, "vCIhnEMbk9wgK4uUxCptm4bFxAAkGdTs");
-    mcrypt = 0;
     retryinterval = 5;
     for (int i = 1 ; i < argc ; i++) {
         if (!strcmp(argv[i], "-h")) {
@@ -701,15 +536,12 @@ int parseargs (int argc, char *argv[]) {
         } else if (!strcmp(argv[i], "-r")) {
             i++;
             retryinterval = atoi(argv[i]);
-        } else if (!strcmp(argv[i], "--enmcrypt")) {
-            mcrypt = 1;
         } else {
             printf("build time: %s %s\n", __DATE__, __TIME__);
             printf("-h server host, default is 192.168.56.101\n");
             printf("-p server port, default is 3480\n");
             printf("-k access key, default is vCIhnEMbk9wgK4uUxCptm4bFxAAkGdTs\n");
             printf("-r retry interval, unit is second, default is 5\n");
-            printf("--enmcrypt enable mcrypt\n");
             return -3;
         }
     }
@@ -717,10 +549,15 @@ int parseargs (int argc, char *argv[]) {
 }
 
 int main (int argc, char *argv[]) {
+#ifdef   USETLS
+    SSL_library_init();
+    OpenSSL_add_all_algorithms();
+    SSL_load_error_strings();
+    ctx = SSL_CTX_new(TLS_client_method());
+#endif
     if (parseargs (argc, argv)) {
         return -1;
     }
-    srand(time(NULL));
     epollfd = epoll_create(MAX_EVENT);
     if (epollfd < 0) {
         printf("create epoll fd fail, in %s, at %d\n",  __FILE__, __LINE__);
@@ -753,5 +590,8 @@ int main (int argc, char *argv[]) {
             }
         }
     }
+#ifdef   USETLS
+    SSL_CTX_free(ctx);
+#endif
     return 0;
 }
