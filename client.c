@@ -131,7 +131,7 @@ int connect_socketfd (unsigned char *host, unsigned int port) {
     if (ip->h_addrtype == AF_INET) { // ipv4
         memcpy(&sin.sin_addr.s_addr, addr, 4);
     } else if (ip->h_addrtype == AF_INET6) { // ipv6
-        printf("not support ipv6, in %s, at %d\n", host, port, __FILE__, __LINE__);
+        printf("not support ipv6, in %s, at %d\n", __FILE__, __LINE__);
         return -2;
     }
 #else
