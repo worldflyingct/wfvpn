@@ -807,7 +807,7 @@ int main (int argc, char *argv[]) {
                 }
             }
         }
-        sleep(c.retryinterval)
+        sleep(c.retryinterval);
     }
     if (c.ssl) {
         SSL_CTX_free(ctx);
