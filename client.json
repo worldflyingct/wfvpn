@@ -1,0 +1,21 @@
+{
+  "serverhost": "vpn.worldflying.cn",
+  "serverport": 443,
+  "tcpkeepalive": true,
+  "tcpkeepidle": 60,
+  "tcpkeepintvl": 3,
+  "tcpkeepcnt": 2,
+  "ssl": true,
+  "ip": "192.168.58.1",
+  "mask": "255.255.255.0",
+  "httphost": "vpn.worldflying.cn",
+  "httppath": "/wfvpn",
+  "tapname": "wfvpn_tap",
+  "key": "fa4gDann6F8vFU5Z",
+  "retryinterval": 5,
+  "routers": [{
+    "dstip": "192.168.78.0",
+    "dstmask": "255.255.255.0",
+    "gateway": "192.168.58.7"
+  }]
+}

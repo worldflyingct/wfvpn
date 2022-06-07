@@ -24,6 +24,16 @@
 #define MAX_CONNECT       1024
 #define MTU_SIZE          1500
 
+const char PAGE404[] =  "HTTP/1.1 404 Not Found\r\nServer: nginx/1.14.2\r\nDate: %a, %d %b %Y %H:%M:%S GMT\r\n" \
+                        "Content-Type: text/html\r\nContent-Length: 169\r\nConnection: keep-alive\r\n\r\n" \
+                        "<html>\r\n<head><title>404 Not Found</title></head>\r\n<body bgcolor=\"white\">\r\n<center><h1>404 Not Found</h1></center>\r\n" \
+                        "<hr><center>nginx/1.14.2</center>\r\n</body>\r\n</html>\r\n";
+const char PAGE400[] =  "HTTP/1.1 400 Bad Request\r\nServer: nginx/1.14.2\r\nDate: %a, %d %b %Y %H:%M:%S GMT\r\n" \
+                        "Content-Type: text/html\r\nContent-Length: 173\r\nConnection: close\r\n\r\n" \
+                        "<html>\r\n<head><title>400 Bad Request</title></head>\r\n<body bgcolor=\"white\">\r\n<center><h1>400 Bad Request</h1></center>\r\n" \
+                        "<hr><center>nginx/1.14.2</center>\r\n</body>\r\n</html>\r\n";
+const char PAGE101[] =  "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n";
+
 struct PACKAGELIST {
     unsigned char data[MTU_SIZE + 18];
     unsigned int size;
@@ -37,7 +47,7 @@ struct CLIENTLIST {
     struct PACKAGELIST *packagelisttail; // 发给自己这个端口的数据包列表尾部
     unsigned char remainpackage[MTU_SIZE + 18]; // 自己接收到的数据出现数据不全，将不全的数据存在这里，等待新的数据将其补全
     unsigned int remainsize; // 不全的数据大小
-    int canwrite;
+    unsigned char canwrite;
     struct CLIENTLIST *hashhead; // 从哈希表中寻找上一个clientlist
     struct CLIENTLIST *hashtail; // 从哈希表中寻找下一个clientlist
     struct CLIENTLIST *head; // 从remainclientlist中寻找下一个可用的clientlist
@@ -67,9 +77,9 @@ struct KEYS {
     struct KEYS *tail;
 };
 struct ROUTERS {
-    unsigned char dstip[16];
-    unsigned char dstmask[16];
-    unsigned char gateway[16];
+    unsigned char dstip[4];
+    unsigned char dstmask[4];
+    unsigned char gateway[4];
     struct ROUTERS *tail;
 };
 struct CONFIG {
@@ -81,9 +91,9 @@ struct CONFIG {
     bool ssl;
     unsigned char crtpath[256];
     unsigned char keypath[256];
+    unsigned char ip[4];
+    unsigned char mask[4];
     unsigned char httppath[256];
-    unsigned char ip[16];
-    unsigned char mask[16];
     unsigned char tapname[16];
     struct KEYS *keys;
     struct ROUTERS *routers;
@@ -151,34 +161,24 @@ int tap_alloc () {
     struct sockaddr_in sin;
     memset(&sin, 0, sizeof(struct sockaddr_in));
 	sin.sin_family = AF_INET;
-    if (inet_pton(AF_INET, c.ip, &sin.sin_addr) < 0) {
-        printf("ip format error, in %s, at %d\n", __FILE__, __LINE__);
-        close(socket_fd);
-        close(fd);
-        return -5;
-    }
+    memcpy(&sin.sin_addr, c.ip, 4);
     memcpy(&ifr.ifr_addr, &sin, sizeof(struct sockaddr));
 	if (ioctl(socket_fd, SIOCSIFADDR, &ifr) < 0) {
         printf("set ip addr for tap device fail, in %s, at %d\n", __FILE__, __LINE__);
         close(socket_fd);
         close(fd);
-        return -6;
+        return -5;
     }
     printf("set ip addr for tap device to %s success, in %s, at %d\n", c.ip, __FILE__, __LINE__);
     memset(&sin, 0, sizeof(struct sockaddr_in));
 	sin.sin_family = AF_INET;
-    if (inet_pton(AF_INET, c.mask, &sin.sin_addr) < 0) {
-        printf("mask format error, in %s, at %d\n", __FILE__, __LINE__);
-        close(socket_fd);
-        close(fd);
-        return -7;
-    }
+    memcpy(&sin.sin_addr, c.mask, 4);
     memcpy(&ifr.ifr_netmask, &sin, sizeof(struct sockaddr));
     if (ioctl(socket_fd, SIOCSIFNETMASK, &ifr) < 0) {
         printf("set netmask for tap device fail, in %s, at %d\n", __FILE__, __LINE__);
         close(socket_fd);
         close(fd);
-        return -8;
+        return -6;
     }
     printf("set netmask for tap device to %s success, in %s, at %d\n", c.mask, __FILE__, __LINE__);
     struct rtentry rt;
@@ -187,46 +187,33 @@ int tap_alloc () {
         memset(&rt, 0, sizeof(struct rtentry));
         memset(&sin, 0, sizeof(struct sockaddr_in));
         sin.sin_family = AF_INET;
-        if (inet_pton(AF_INET, routers->dstip, &sin.sin_addr) < 0) {
-            printf("dstip format error, in %s, at %d\n", __FILE__, __LINE__);
-            close(socket_fd);
-            close(fd);
-            return -9;
-        }
+        memcpy(&sin.sin_addr, routers->dstip, 4);
         memcpy(&rt.rt_dst, &sin, sizeof(struct sockaddr_in));
         memset(&sin, 0, sizeof(struct sockaddr_in));
         sin.sin_family = AF_INET;
-        if (inet_pton(AF_INET, routers->dstmask, &sin.sin_addr) < 0) {
-            printf("dstmask format error, in %s, at %d\n", __FILE__, __LINE__);
-            close(socket_fd);
-            close(fd);
-            return -10;
-        }
+        memcpy(&sin.sin_addr, routers->dstmask, 4);
         memcpy(&rt.rt_genmask, &sin, sizeof(struct sockaddr_in));
         memset(&sin, 0, sizeof(struct sockaddr_in));
         sin.sin_family = AF_INET;
-        if (inet_pton(AF_INET, routers->gateway, &sin.sin_addr) < 0) {
-            printf("inet_pton error, in %s, at %d\n", __FILE__, __LINE__);
-            close(socket_fd);
-            close(fd);
-            return -11;
-        }
+        memcpy(&sin.sin_addr, routers->gateway, 4);
         memcpy(&rt.rt_gateway, &sin, sizeof(struct sockaddr_in));
         rt.rt_flags = RTF_GATEWAY;
         if (ioctl(socket_fd, SIOCADDRT, &rt) < 0) {
             printf("set static route fail, in %s, at %d\n", __FILE__, __LINE__);
             close(socket_fd);
             close(fd);
-            return -12;
+            return -7;
         }
         printf("add static route %s mask %s via %s success, in %s, at %d\n", routers->dstip, routers->dstmask, routers->gateway, __FILE__, __LINE__);
+        struct ROUTERS *r = routers;
         routers = routers->tail;
+        free(r);
     }
     close(socket_fd);
     if (setnonblocking(fd) < 0) {
         printf("set nonblocking fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
         close(fd);
-        return -13;
+        return -8;
     }
     printf("tap device name is %s, tapfd %d, in %s, at %d\n", ifr.ifr_name, fd, __FILE__, __LINE__);
     if (remainclientlisthead) {
@@ -237,7 +224,7 @@ int tap_alloc () {
         if (tapclient == NULL) {
             printf("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
             close(fd);
-            return -14;
+            return -9;
         }
     }
     memset(tapclient->mac, 0, 6);
@@ -264,11 +251,13 @@ int tap_alloc () {
             tapclient->tail = remainclientlisthead;
             remainclientlisthead = tapclient;
             close(fd);
-            return -15;
+            return -10;
         }
     }
     tapclient->fdclient = fdclient;
     fdclient->fd = fd;
+    fdclient->tls = NULL;
+    fdclient->tlsconnected = 0;
     fdclient->watch = 0;
     fdclient->client = tapclient;
     if (addtoepoll(fdclient)) {
@@ -279,7 +268,7 @@ int tap_alloc () {
         tapclient->tail = remainclientlisthead;
         remainclientlisthead = tapclient;
         close(fd);
-        return -16;
+        return -11;
     }
     fdclient->watch = 1;
     return 0;
@@ -335,11 +324,11 @@ int addclient (int serverfd) {
     struct sockaddr_in sin;
     socklen_t in_addr_len = sizeof(struct sockaddr_in);
     int fd = accept(serverfd, (struct sockaddr*)&sin, &in_addr_len);
-    printf("new socket:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
     if (fd < 0) {
         printf("accept a new fd fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         return -1;
     }
+    printf("new socket:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
     if (setnonblocking(fd) < 0) { // 设置为非阻塞IO
         printf("set nonblocking fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
         close(fd);
@@ -351,30 +340,42 @@ int addclient (int serverfd) {
         close(fd);
         return -3;
     }
+    socksval = 1;
+    if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &socksval, sizeof(socksval))) {
+        printf("set socket reuseaddr fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
+        close(fd);
+        return -4;
+    }
+    socksval = 1;
+    if (setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &socksval, sizeof(socksval))) {
+        printf("set socket reuseport fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
+        close(fd);
+        return -5;
+    }
     if (c.tcpkeepalive) {
         socksval = 1;
         if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, (unsigned char*)&socksval, sizeof(socksval))) { // 启动tcp心跳包
             printf("set socket keepalive fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
             close(fd);
-            return -4;
+            return -6;
         }
         socksval = c.tcpkeepidle;
         if (setsockopt(fd, SOL_TCP, TCP_KEEPIDLE, (unsigned char*)&socksval, sizeof(socksval))) { // 设置tcp心跳包参数
             printf("set socket keepidle fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
             close(fd);
-            return -5;
+            return -7;
         }
         socksval = c.tcpkeepintvl;
         if (setsockopt(fd, SOL_TCP, TCP_KEEPINTVL, (unsigned char*)&socksval, sizeof(socksval))) { // 设置tcp心跳包参数
             printf("set socket keepintvl fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
             close(fd);
-            return -6;
+            return -8;
         }
         socksval = c.tcpkeepcnt;
         if (setsockopt(fd, SOL_TCP, TCP_KEEPCNT, (unsigned char*)&socksval, sizeof(socksval))) { // 设置tcp心跳包参数
             printf("set socket keepcnt fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
             close(fd);
-            return -7;
+            return -9;
         }
     }
     // 修改发送缓冲区大小
@@ -382,20 +383,20 @@ int addclient (int serverfd) {
     if (getsockopt(fd, SOL_SOCKET, SO_SNDBUF, (unsigned char*)&socksval, &socksval_len)) {
         printf("get send buffer fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         close(fd);
-        return -8;
+        return -10;
     }
     printf("old send buffer is %d, socksval_len:%d, fd:%d, in %s, at %d\n", socksval, socksval_len, fd,  __FILE__, __LINE__);
     socksval = MAXDATASIZE;
     if (setsockopt(fd, SOL_SOCKET, SO_SNDBUF, (unsigned char*)&socksval, sizeof (socksval))) {
         printf("set send buffer fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         close(fd);
-        return -9;
+        return -11;
     }
     socksval_len = sizeof(socksval);
     if (getsockopt(fd, SOL_SOCKET, SO_SNDBUF, (unsigned char*)&socksval, &socksval_len)) {
         printf("get send buffer fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         close(fd);
-        return -10;
+        return -12;
     }
     printf("new send buffer is %d, socksval_len:%d, fd:%d, in %s, at %d\n", socksval, socksval_len, fd,  __FILE__, __LINE__);
     // 修改接收缓冲区大小
@@ -403,20 +404,20 @@ int addclient (int serverfd) {
     if (getsockopt(fd, SOL_SOCKET, SO_RCVBUF, (unsigned char*)&socksval, &socksval_len)) {
         printf("get receive buffer fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         close(fd);
-        return -11;
+        return -13;
     }
     printf("old receive buffer is %d, socksval_len:%d, fd:%d, in %s, at %d\n", socksval, socksval_len, fd,  __FILE__, __LINE__);
     socksval = MAXDATASIZE;
     if (setsockopt(fd, SOL_SOCKET, SO_RCVBUF, (char*)&socksval, sizeof(socksval))) {
         printf("set receive buffer fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         close(fd);
-        return -12;
+        return -14;
     }
     socksval_len = sizeof(socksval);
     if (getsockopt(fd, SOL_SOCKET, SO_RCVBUF, (unsigned char*)&socksval, &socksval_len)) {
         printf("get receive buffer fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         close(fd);
-        return -13;
+        return -15;
     }
     printf("new receive buffer is %d, socksval_len:%d, fd:%d, in %s, at %d\n", socksval, socksval_len, fd,  __FILE__, __LINE__);
     struct FDCLIENT *fdclient;
@@ -428,7 +429,7 @@ int addclient (int serverfd) {
         if (fdclient == NULL) {
             printf("malloc new fdclient object fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
             close(fd);
-            return -14;
+            return -16;
         }
     }
     fdclient->fd = fd;
@@ -437,10 +438,21 @@ int addclient (int serverfd) {
     if (c.ssl) {
         SSL *tls = SSL_new(ctx);
         if (tls == NULL) {
+            printf("SSL new fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
+            fdclient->tail = remainfdclienthead;
+            remainfdclienthead = fdclient;
             close(fd);
-            return -15;
+            return -17;
         }
-        SSL_set_fd(tls, fd);
+        if (!SSL_set_fd(tls, fd)) {
+            printf("SSL set fd fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
+            fdclient->tail = remainfdclienthead;
+            remainfdclienthead = fdclient;
+            SSL_shutdown(tls);
+            SSL_free(tls);
+            close(fd);
+            return -18;
+        }
         fdclient->tls = tls;
         int r_code = SSL_accept(tls);
         if (r_code < 0) {
@@ -453,23 +465,26 @@ int addclient (int serverfd) {
                 SSL_shutdown(tls);
                 SSL_free(tls);
                 close(fd);
-                return -16;
+                return -19;
             }
             fdclient->tlsconnected = 0;
         } else {
             fdclient->tlsconnected = 1;
         }
+    } else {
+        fdclient->tls = NULL;
+        fdclient->tlsconnected = 0;
     }
     if (addtoepoll(fdclient)) {
         printf("add to epoll fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         fdclient->tail = remainfdclienthead;
         remainfdclienthead = fdclient;
-        if (c.ssl) {
+        if (fdclient->tls) {
             SSL_shutdown(fdclient->tls);
             SSL_free(fdclient->tls);
         }
         close(fd);
-        return -17;
+        return -20;
     }
     fdclient->watch = 1;
     return 0;
@@ -485,7 +500,7 @@ int removeclient (struct FDCLIENT *fdclient) {
         return -1;
     }
     fdclient->watch = 0;
-    if (c.ssl) {
+    if (fdclient->tls) {
         SSL_shutdown(fdclient->tls);
         SSL_free(fdclient->tls);
     }
@@ -537,7 +552,7 @@ int writenode (struct CLIENTLIST *writeclient) {
         client->packagelisthead = NULL;
         while (package) {
             ssize_t len;
-            if (c.ssl) {
+            if (client->fdclient->tls) {
                 len = SSL_write(client->fdclient->tls, package->data, package->size);
             } else {
                 len = write(client->fdclient->fd, package->data, package->size);
@@ -637,13 +652,24 @@ struct CLIENTLIST* braodcastdata (struct CLIENTLIST *sourceclient, unsigned char
     return writeclient;
 }
 
+int checkkeys (char *key) {
+    struct KEYS *keys = c.keys;
+    while (keys != NULL) {
+        if (!strcmp(keys->key, key)) {
+            return 1;
+        }
+        keys = keys->tail;
+    }
+    return 0;
+}
+
 int readdata (struct FDCLIENT *fdclient) {
     unsigned char *readbuff = NULL; // 这里是用于存储全部的需要写入的数据buf，
     unsigned int maxtotalsize = 0;
     struct CLIENTLIST *sourceclient = fdclient->client;
     ssize_t len;
     if (sourceclient == tapclient) { // tap驱动，原始数据，需要自己额外添加数据包长度。
-        len = read(sourceclient->fdclient->fd, readbuf + 2, MAXDATASIZE); // 这里最大只可能是1518
+        len = read(fdclient->fd, readbuf + 2, MAXDATASIZE); // 这里最大只可能是1518
         if (len < 0) {
             if (errno != EAGAIN) {
                 printf("errno:%d, in %s, at %d\n", errno,  __FILE__, __LINE__);
@@ -656,10 +682,10 @@ int readdata (struct FDCLIENT *fdclient) {
         readbuf[1] = len & 0xff;
         len += 2;
     } else { // 网络套接字。
-        if (c.ssl) {
-            len = SSL_read(sourceclient->fdclient->tls, readbuf, MAXDATASIZE);
+        if (fdclient->tls) {
+            len = SSL_read(fdclient->tls, readbuf, MAXDATASIZE);
         } else {
-            len = read(sourceclient->fdclient->fd, readbuf, MAXDATASIZE);
+            len = read(fdclient->fd, readbuf, MAXDATASIZE);
         }
         if (len < 0) {
             if (errno != EAGAIN) {
@@ -670,18 +696,8 @@ int readdata (struct FDCLIENT *fdclient) {
             return -2;
         }
     }
-    unsigned int offset = 0;
+    readbuf[len] = '\0';
     if (sourceclient == NULL) { // 用户没有找到
-        if (len < 9 + sizeof("123456789") - 1) {
-            printf("len abnormal, in %s, at %d\n",  __FILE__, __LINE__);
-            removeclient(fdclient);
-            return -3;
-        }
-        if (readbuf[0] != 0x00 || readbuf[1] != 0x00 || readbuf[2] != 0x00) { // 前两个字节为0代表特殊命令，单独处理。第三个字节为0代表注册。
-            printf("just can run login, in %s, at %d\n",  __FILE__, __LINE__);
-            removeclient(fdclient);
-            return -4;
-        }
         if (remainclientlisthead) {
             sourceclient = remainclientlisthead;
             remainclientlisthead = remainclientlisthead->tail;
@@ -690,42 +706,69 @@ int readdata (struct FDCLIENT *fdclient) {
             if (sourceclient == NULL) {
                 printf("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
                 removeclient(fdclient);
-                return -6;
+                return -3;
             }
         }
         memset(sourceclient->mac, 0, 6);
         sourceclient->fdclient = fdclient;
-        sourceclient->packagelisthead = NULL;
         sourceclient->remainsize = 0;
         sourceclient->canwrite = 1;
-        sourceclient->head = NULL;
-        if (clientlisthead) {
-            clientlisthead->head = sourceclient;
+        sourceclient->tail = NULL;
+        struct PACKAGELIST *package;
+        if (remainpackagelisthead) { // 全局数据包回收站不为空
+            package = remainpackagelisthead;
+            remainpackagelisthead = remainpackagelisthead->tail;
+        } else {
+            package = (struct PACKAGELIST*) malloc(sizeof(struct PACKAGELIST));
+            if (package == NULL) {
+                printf("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
+                return -4;
+            }
         }
-        sourceclient->tail = clientlisthead;
-        clientlisthead = sourceclient;
-        fdclient->client = sourceclient;
-        if (memcmp(readbuf + 21, "123456789", sizeof("123456789")-1)) { // 绑定密码错误
-            printf("password check fail, in %s, at %d\n",  __FILE__, __LINE__);
+        package->tail = NULL;
+        sourceclient->packagelisthead = package;
+        unsigned char *headend = strstr(readbuf, "\r\n\r\n");
+        unsigned char httppath[256];
+        unsigned char httpprot[16];
+        if (sscanf(readbuf, "GET %s %s\r\n", httppath, httpprot) != 2 || strcmp(httpprot, "HTTP/1.1") || headend == NULL) {
+            time_t now;
+            time(&now);
+            int len = strftime(package->data, MTU_SIZE+18, PAGE400, gmtime(&now));
+            package->size = len;
+            writenode(sourceclient);
             removeclient(fdclient);
             return -5;
         }
-        unsigned char data[1];
-        data[0] = 0x01;
-        ssize_t wlen;
-        if (c.ssl) {
-            wlen = SSL_write(sourceclient->fdclient->tls, data, sizeof(data));
-        } else {
-            wlen = write(sourceclient->fdclient->fd, data, sizeof(data));
+        *headend = '\0'; // 给http头部结尾添加字符串结束符，不解析body。
+        unsigned char *key = strstr(readbuf, "Authorization: ");
+        if (key != NULL) {
+            key = key + 15;
+            unsigned char *keyend = strchr(key, '\r');
+            *keyend = '\0';
         }
-        if (wlen != sizeof(data)) {
-            printf("write response data fail, in %s, at %d\n",  __FILE__, __LINE__);
+        if (key == NULL || !strcmp(httppath, c.httppath) || !checkkeys(key)) {
+            time_t now;
+            time(&now);
+            int len = strftime(package->data, MTU_SIZE+18, PAGE404, gmtime(&now));
+            package->size = len;
+            writenode(sourceclient);
             removeclient(fdclient);
-            return -8;
+            return -6;
         }
-        offset += 21 + sizeof("123456789") - 1; // 绑定包长度
+        memcpy(package->data, PAGE101, sizeof(PAGE101)-1);
+        package->size = sizeof(PAGE101)-1;
+        writenode(sourceclient);
+        if (clientlisthead) {
+            clientlisthead->head = sourceclient;
+        }
+        sourceclient->head = NULL;
+        sourceclient->tail = clientlisthead;
+        clientlisthead = sourceclient;
+        fdclient->client = sourceclient;
         printf("add client success, fd:%d, in %s, at %d\n", sourceclient->fdclient->fd,  __FILE__, __LINE__);
+        return 0;
     }
+    unsigned int offset = 0;
     unsigned int totalsize;
     unsigned char *buff;
     if (sourceclient->remainsize > 0) {
@@ -931,13 +974,19 @@ int parseconfigfile () {
         printf("ip not found, in %s, at %d\n", __FILE__, __LINE__);
         return -1;
     }
-    strcpy(c.ip, yyjson_get_str(ip));
+    if (inet_pton(AF_INET, yyjson_get_str(ip), c.ip) < 0) {
+        printf("ip format error, in %s, at %d\n", __FILE__, __LINE__);
+        return -23;
+    }
     yyjson_val *mask = yyjson_obj_get(root, "mask");
     if (mask == NULL || yyjson_get_type(mask) != YYJSON_TYPE_STR) {
         printf("mask not found, in %s, at %d\n", __FILE__, __LINE__);
         return -1;
     }
-    strcpy(c.mask, yyjson_get_str(mask));
+    if (inet_pton(AF_INET, yyjson_get_str(mask), c.mask) < 0) {
+        printf("mask format error, in %s, at %d\n", __FILE__, __LINE__);
+        return -23;
+    }
     yyjson_val *tapname = yyjson_obj_get(root, "tapname");
     if (tapname == NULL || yyjson_get_type(tapname) != YYJSON_TYPE_STR) {
         strcpy(c.tapname, "wfvpn_tap");
@@ -966,40 +1015,47 @@ int parseconfigfile () {
         c.keys = keys;
     }
     yyjson_val *routers = yyjson_obj_get(root, "routers");
-    if (routers == NULL || yyjson_get_type(routers) != YYJSON_TYPE_ARR) {
-        printf("routers not found, in %s, at %d\n", __FILE__, __LINE__);
-        return -1;
-    }
-    yyjson_arr_foreach(routers, idx, max, v) {
-        if (v == NULL || yyjson_get_type(v) != YYJSON_TYPE_OBJ) {
-            printf("routers format error, in %s, at %d\n", __FILE__, __LINE__);
-            return -1;
+    if (yyjson_get_type(routers) == YYJSON_TYPE_ARR) {
+        yyjson_arr_foreach(routers, idx, max, v) {
+            if (v == NULL || yyjson_get_type(v) != YYJSON_TYPE_OBJ) {
+                printf("routers format error, in %s, at %d\n", __FILE__, __LINE__);
+                return -1;
+            }
+            struct ROUTERS *routers = (struct ROUTERS*)malloc(sizeof(struct ROUTERS));
+            if (routers == NULL) {
+                printf("malloc fail, in %s, at %d\n", __FILE__, __LINE__);
+                return -1;
+            }
+            yyjson_val *dstip = yyjson_obj_get(v, "dstip");
+            if (dstip == NULL || yyjson_get_type(dstip) != YYJSON_TYPE_STR) {
+                printf("dstip not found, in %s, at %d\n", __FILE__, __LINE__);
+                return -1;
+            }
+            if (inet_pton(AF_INET, yyjson_get_str(dstip), routers->dstip) < 0) {
+                printf("dstip format error, in %s, at %d\n", __FILE__, __LINE__);
+                return -23;
+            }
+            yyjson_val *dstmask = yyjson_obj_get(v, "dstmask");
+            if (dstmask == NULL || yyjson_get_type(dstmask) != YYJSON_TYPE_STR) {
+                printf("dstmask not found, in %s, at %d\n", __FILE__, __LINE__);
+                return -1;
+            }
+            if (inet_pton(AF_INET, yyjson_get_str(dstmask), routers->dstmask) < 0) {
+                printf("dstmask format error, in %s, at %d\n", __FILE__, __LINE__);
+                return -23;
+            }
+            yyjson_val *gateway = yyjson_obj_get(v, "gateway");
+            if (gateway == NULL || yyjson_get_type(gateway) != YYJSON_TYPE_STR) {
+                printf("gateway not found, in %s, at %d\n", __FILE__, __LINE__);
+                return -1;
+            }
+            if (inet_pton(AF_INET, yyjson_get_str(gateway), routers->gateway) < 0) {
+                printf("gateway format error, in %s, at %d\n", __FILE__, __LINE__);
+                return -23;
+            }
+            routers->tail = c.routers;
+            c.routers = routers;
         }
-        struct ROUTERS *routers = (struct ROUTERS*)malloc(sizeof(struct ROUTERS));
-        if (routers == NULL) {
-            printf("malloc fail, in %s, at %d\n", __FILE__, __LINE__);
-            return -1;
-        }
-        yyjson_val *dstip = yyjson_obj_get(v, "dstip");
-        if (dstip == NULL || yyjson_get_type(dstip) != YYJSON_TYPE_STR) {
-            printf("dstip not found, in %s, at %d\n", __FILE__, __LINE__);
-            return -1;
-        }
-        strcpy(routers->dstip, yyjson_get_str(dstip));
-        yyjson_val *dstmask = yyjson_obj_get(v, "dstmask");
-        if (dstmask == NULL || yyjson_get_type(dstmask) != YYJSON_TYPE_STR) {
-            printf("dstmask not found, in %s, at %d\n", __FILE__, __LINE__);
-            return -1;
-        }
-        strcpy(routers->dstmask, yyjson_get_str(dstmask));
-        yyjson_val *gateway = yyjson_obj_get(v, "gateway");
-        if (gateway == NULL || yyjson_get_type(gateway) != YYJSON_TYPE_STR) {
-            printf("gateway not found, in %s, at %d\n", __FILE__, __LINE__);
-            return -1;
-        }
-        strcpy(routers->gateway, yyjson_get_str(gateway));
-        routers->tail = c.routers;
-        c.routers = routers;
     }
     yyjson_doc_free(doc);
     return 0;
@@ -1054,15 +1110,15 @@ int main () {
             struct FDCLIENT *fdclient = evs[i].data.ptr;
             uint32_t events = evs[i].events;
             if (fdclient->watch == 0) { // 监听为空,什么事都不做
-                ;
+                continue;
             } else if (events & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) { // 检测到数据异常
                 printf("connect lose, fd:%d, EPOLLERR:%d, EPOLLHUP:%d, EPOLLRDHUP:%d, in %s, at %d\n", fdclient->fd, events&EPOLLERR ? 1 : 0, events&EPOLLHUP ? 1 : 0, events&EPOLLRDHUP ? 1 : 0, __FILE__, __LINE__);
                 removeclient(fdclient);
             } else if (fdclient == fdserver) {
                 addclient(fdclient->fd);
             } else if (events & EPOLLIN) { // 数据可读
-                if (c.ssl) {
-                    if (fdclient->tlsconnected == 0 && fdclient->client != tapclient) {
+                if (fdclient->tls) {
+                    if (fdclient->tlsconnected == 0) {
                         int r_code = SSL_accept(fdclient->tls);
                         if (r_code < 0) {
                             int errcode = SSL_get_error(fdclient->tls, r_code);
