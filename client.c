@@ -437,13 +437,11 @@ int writenode (struct CLIENTLIST *client) {
                 } else {
                     perror("socket write error");
                 }
-                removeclient();
                 return -1;
             }
             if (client->canwrite) { // 之前缓冲区是可以写入的，现在不行了
                 if (modepoll(client, EPOLLOUT)) { // 监听可写事件
                     printf("modepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
-                    removeclient();
                     return -2;
                 }
                 client->canwrite = 0;
@@ -458,7 +456,6 @@ int writenode (struct CLIENTLIST *client) {
             if (client->canwrite) { // 之前缓冲区是可以写入的，现在不行了
                 if (modepoll(client, EPOLLOUT)) { // 监听可写事件
                     printf("modepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
-                    removeclient();
                     return -3;
                 }
                 client->canwrite = 0;
@@ -469,7 +466,6 @@ int writenode (struct CLIENTLIST *client) {
             if (modepoll(client, 0)) { // 取消监听可写事件
                 printf("modepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
                 client->packagelisthead = package;
-                removeclient();
                 return -4;
             }
             client->canwrite = 1;
@@ -493,7 +489,6 @@ int readdata (struct CLIENTLIST *sourceclient) {
             if (errno != EAGAIN) {
                 printf("errno:%d, in %s, at %d\n", errno,  __FILE__, __LINE__);
                 perror("tap read error");
-                removeclient();
                 return -1;
             }
             return 0;
@@ -512,7 +507,6 @@ int readdata (struct CLIENTLIST *sourceclient) {
             if (errno != EAGAIN) {
                 printf("errno:%d, in %s, at %d\n", errno,  __FILE__, __LINE__);
                 perror("socket read error");
-                removeclient(sourceclient);
                 return -2;
             }
             return 0;
@@ -531,7 +525,6 @@ int readdata (struct CLIENTLIST *sourceclient) {
             readbuff = (unsigned char*) malloc(totalsize * sizeof(unsigned char));
             if (readbuff == NULL) {
                 printf("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
-                removeclient(sourceclient);
                 return -3;
             }
             maxtotalsize = totalsize;
@@ -661,33 +654,33 @@ int parseconfigfile () {
     }
     yyjson_val *httphost = yyjson_obj_get(root, "httphost");
     if (httphost == NULL || yyjson_get_type(httphost) != YYJSON_TYPE_STR) {
-        printf("httphost not found, in %s, at %d\n", __FILE__, __LINE__);
-        return -9;
+        strcpy(c.httphost, yyjson_get_str(httphost));
+    } else {
+        strcpy(c.httphost, "localhost");
     }
-    strcpy(c.httphost, yyjson_get_str(httphost));
     yyjson_val *httppath = yyjson_obj_get(root, "httppath");
     if (httppath == NULL || yyjson_get_type(httppath) != YYJSON_TYPE_STR) {
         printf("httppath not found, in %s, at %d\n", __FILE__, __LINE__);
-        return -10;
+        return -9;
     }
     strcpy(c.httppath, yyjson_get_str(httppath));
     yyjson_val *ip = yyjson_obj_get(root, "ip");
     if (ip == NULL || yyjson_get_type(ip) != YYJSON_TYPE_STR) {
         printf("ip not found, in %s, at %d\n", __FILE__, __LINE__);
-        return -11;
+        return -10;
     }
     if (inet_pton(AF_INET, yyjson_get_str(ip), c.ip) < 0) {
         printf("ip format error, in %s, at %d\n", __FILE__, __LINE__);
-        return -12;
+        return -11;
     }
     yyjson_val *mask = yyjson_obj_get(root, "mask");
     if (mask == NULL || yyjson_get_type(mask) != YYJSON_TYPE_STR) {
         printf("mask not found, in %s, at %d\n", __FILE__, __LINE__);
-        return -13;
+        return -12;
     }
     if (inet_pton(AF_INET, yyjson_get_str(mask), c.mask) < 0) {
         printf("mask format error, in %s, at %d\n", __FILE__, __LINE__);
-        return -14;
+        return -13;
     }
     yyjson_val *tapname = yyjson_obj_get(root, "tapname");
     if (tapname == NULL || yyjson_get_type(tapname) != YYJSON_TYPE_STR) {
@@ -698,12 +691,12 @@ int parseconfigfile () {
     yyjson_val *key = yyjson_obj_get(root, "key");
     if (key == NULL || yyjson_get_type(key) != YYJSON_TYPE_STR) {
         printf("key not found, in %s, at %d\n", __FILE__, __LINE__);
-        return -15;
+        return -14;
     }
     strcpy(c.key, yyjson_get_str(key));
     yyjson_val *retryinterval = yyjson_obj_get(root, "retryinterval");
     if (retryinterval == NULL || yyjson_get_type(retryinterval) != YYJSON_TYPE_NUM) {
-        c.retryinterval = 5;
+        c.retryinterval = 1;
     } else {
         c.retryinterval = yyjson_get_int(retryinterval);
     }
@@ -714,39 +707,39 @@ int parseconfigfile () {
         yyjson_arr_foreach(routers, idx, max, v) {
             if (v == NULL || yyjson_get_type(v) != YYJSON_TYPE_OBJ) {
                 printf("routers format error, in %s, at %d\n", __FILE__, __LINE__);
-                return -16;
+                return -15;
             }
             struct ROUTERS *routers = (struct ROUTERS*)malloc(sizeof(struct ROUTERS));
             if (routers == NULL) {
                 printf("malloc fail, in %s, at %d\n", __FILE__, __LINE__);
-                return -17;
+                return -16;
             }
             yyjson_val *dstip = yyjson_obj_get(v, "dstip");
             if (dstip == NULL || yyjson_get_type(dstip) != YYJSON_TYPE_STR) {
                 printf("dstip not found, in %s, at %d\n", __FILE__, __LINE__);
-                return -18;
+                return -17;
             }
             if (inet_pton(AF_INET, yyjson_get_str(dstip), routers->dstip) < 0) {
                 printf("dstip format error, in %s, at %d\n", __FILE__, __LINE__);
-                return -19;
+                return -18;
             }
             yyjson_val *dstmask = yyjson_obj_get(v, "dstmask");
             if (dstmask == NULL || yyjson_get_type(dstmask) != YYJSON_TYPE_STR) {
                 printf("dstmask not found, in %s, at %d\n", __FILE__, __LINE__);
-                return -20;
+                return -19;
             }
             if (inet_pton(AF_INET, yyjson_get_str(dstmask), routers->dstmask) < 0) {
                 printf("dstmask format error, in %s, at %d\n", __FILE__, __LINE__);
-                return -21;
+                return -20;
             }
             yyjson_val *gateway = yyjson_obj_get(v, "gateway");
             if (gateway == NULL || yyjson_get_type(gateway) != YYJSON_TYPE_STR) {
                 printf("gateway not found, in %s, at %d\n", __FILE__, __LINE__);
-                return -22;
+                return -21;
             }
             if (inet_pton(AF_INET, yyjson_get_str(gateway), routers->gateway) < 0) {
                 printf("dstmask format error, in %s, at %d\n", __FILE__, __LINE__);
-                return -23;
+                return -22;
             }
             routers->tail = c.routers;
             c.routers = routers;
@@ -781,7 +774,8 @@ int main (int argc, char *argv[]) {
             printf("alloc tap fail, in %s, at %d\n",  __FILE__, __LINE__);
             return -4;
         }
-        while (1) {
+        unsigned char loop = 1;
+        while (loop) {
             static struct epoll_event evs[MAX_EVENT];
             static int wait_count;
             wait_count = epoll_wait(epollfd, evs, MAX_EVENT, -1);
@@ -791,22 +785,29 @@ int main (int argc, char *argv[]) {
                 if (events & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) { // 检测到数据异常
                     printf ("receive error event, fd:%d, EPOLLERR:%d, EPOLLHUP:%d, EPOLLRDHUP:%d, in %s, at %d\n", client->fd, events&EPOLLERR ? 1 : 0, events&EPOLLHUP ? 1 : 0, events&EPOLLRDHUP ? 1 : 0,  __FILE__, __LINE__);
                     removeclient();
+                    loop = 0;
                     break;
                 } else if (events & EPOLLIN) {
                     if (readdata(client) < 0) {
+                        removeclient();
+                        loop = 0;
                         break;
                     }
                 } else if (events & EPOLLOUT) {
                     if (writenode(client) < 0) {
+                        removeclient();
+                        loop = 0;
                         break;
                     }
                 } else {
                     printf("receive new event 0x%08x, in %s, at %d\n", evs[i].events,  __FILE__, __LINE__);
                     removeclient();
+                    loop = 0;
                     break;
                 }
             }
         }
+        sleep(c.retryinterval)
     }
     if (c.ssl) {
         SSL_CTX_free(ctx);

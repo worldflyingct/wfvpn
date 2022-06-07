@@ -19,47 +19,17 @@
 
 ## 编译命令
 
+仅仅依赖openssl，如果希望静态编译，推荐使用musl-gcc对openssl静态编译，然后在对本程序进行编译。
+
+## 编译命令
+
 ```
-gcc -static -std=gnu99 -O3 -o server server.c
-gcc -static -std=gnu99 -O3 -o client client.c
+make
 ```
 
 ## 系统设置
 
-考虑到其编译的灵活性，系统并不会主动给虚拟网卡配置ip，需要等待启动了应用程序后通过如下命令配置ip以及启动网卡:
-```
-ip address add 192.168.23.1/24 dev tap0
-ip link set tap0 up
-```
-tap的编号会随着启动的程序数量变化而变化，从0开始。
-
-需要启动内核的路由转发以及端口的路由转发许可。
-```
-echo 1 > /proc/sys/net/ipv4/ip_forward
-```
-然后在特定地点设置静态路由
-linux的设置方式如下:
-```
-添加: ip route add 10.0.3.0/24 via 10.0.18.1
-删除: ip route del 10.0.3.0/24 via 10.0.18.1
-查看: ip route
-```
-windows的设置方式如下:
-```
-添加: route add 10.0.18.0 mask 255.255.255.0 10.0.3.1
-删除: route delete 10.0.18.0 mask 255.255.255.0 10.0.3.1
-查看: route print
-```
-如果需要ip映射，就需要用到iptables，请运行如下命令:
-```
-iptables -A FORWARD -d 192.168.23.20/32 -p tcp --dport 80 -j ACCEPT
-iptables -t nat -A PREROUTING -p tcp --dport 80 -j DNAT --to 192.168.23.20:80
-iptables -t nat -A POSTROUTING -p tcp -d 192.168.23.20/32 --dport 80 -j MASQUERADE
-```
-另外，考虑到该项目是模拟交换机工作，运行时系统会发送arp数据包进行arp学习，如果要查询系统的arp缓存，可以运行如下命令:
-```
-cat /proc/net/arp
-```
+请参考server.json与client.json，当程序运行时，请将这两个文件修改为config.json然后调用。
 
 ## 未来展望
 
