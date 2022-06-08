@@ -1,12 +1,12 @@
 {
   "serverhost": "vpn.worldflying.cn",
-  "serverport": 443,
+  "serverport": 32828,
   "tcpkeepalive": true,             // 可选，默认false
   "tcpkeepidle": 60,                // 可选，当tcpkeepalive为true时才需要
   "tcpkeepintvl": 3,                // 可选，当tcpkeepalive为true时才需要
   "tcpkeepcnt": 2,                  // 可选，当tcpkeepalive为true时才需要
-  "ssl": true,                      // 可选，默认false
-  "ip": "192.168.58.1",
+  "ssl": false,                     // 可选，默认false
+  "ip": "192.168.58.7",
   "mask": "255.255.255.0",
   "httphost": "vpn.worldflying.cn", // 可选，默认localhost
   "httppath": "/wfvpn",
@@ -14,8 +14,8 @@
   "key": "fa4gDann6F8vFU5Z",
   "retryinterval": 1,               // 可选，默认1
   "routers": [{                     // 可选，无此参数就不设置静态路由
-    "dstip": "192.168.78.0",
+    "dstip": "192.168.68.0",
     "dstmask": "255.255.255.0",
-    "gateway": "192.168.58.7"
+    "gateway": "192.168.58.1"
   }]
 }

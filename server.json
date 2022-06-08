@@ -1,10 +1,10 @@
 {
-  "bindport": 443,
+  "bindport": 32828,
   "tcpkeepalive": true,     // 可选，默认false
   "tcpkeepidle": 60,        // 可选，当tcpkeepalive为true时才需要
   "tcpkeepintvl": 3,        // 可选，当tcpkeepalive为true时才需要
   "tcpkeepcnt": 2,          // 可选，当tcpkeepalive为true时才需要
-  "ssl": true,              // 可选，默认false
+  "ssl": false,             // 可选，默认false
   "crtpath": "server.crt",  // 可选，当ssl为true时才需要
   "keypath": "server.key",  // 可选，当ssl为true时才需要
   "ip": "192.168.58.1",
