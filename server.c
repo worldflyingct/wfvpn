@@ -18,6 +18,8 @@
 #include <openssl/ssl.h>
 // 包入json解析头部
 #include "yyjson.h"
+// 监听异常中断
+#include "exception.h"
 
 #define MAXDATASIZE       2*1024*1024
 #define MAX_EVENT         1024
@@ -61,8 +63,8 @@ struct CLIENTLIST *tapclient;
 struct FDCLIENT {
     int fd;
     SSL *tls;
-    int tlsconnected;
-    int watch;
+    unsigned char tlsconnected;
+    unsigned char watch;
     struct CLIENTLIST *client;
     struct FDCLIENT *tail; // 从remainclientlist中寻找下一个可用的clientlist
 };
@@ -101,6 +103,9 @@ struct CONFIG {
 struct CONFIG c;
 
 int setnonblocking (int fd) {
+#ifdef EXCEPTION_DEBUG
+    addTrace(__func__, sizeof(__func__));
+#endif
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags < 0) {
         printf("get flags fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
@@ -113,21 +118,30 @@ int setnonblocking (int fd) {
     return 0;
 }
 
-int addtoepoll (struct FDCLIENT *fdclient) {
+int addtoepoll (struct FDCLIENT *fdclient, uint32_t flags) {
+#ifdef EXCEPTION_DEBUG
+    addTrace(__func__, sizeof(__func__));
+#endif
     struct epoll_event ev;
     ev.data.ptr = fdclient;
-    ev.events = EPOLLIN | EPOLLERR | EPOLLHUP | EPOLLRDHUP; // 水平触发，保证所有数据都能读到
+    ev.events = EPOLLERR | EPOLLHUP | EPOLLRDHUP | flags; // 水平触发，保证所有数据都能读到
     return epoll_ctl(epollfd, EPOLL_CTL_ADD, fdclient->fd, &ev);
 }
 
-int modepoll (struct FDCLIENT *fdclient, int flags) {
+int modepoll (struct FDCLIENT *fdclient, uint32_t flags) {
+#ifdef EXCEPTION_DEBUG
+    addTrace(__func__, sizeof(__func__));
+#endif
     struct epoll_event ev;
     ev.data.ptr = fdclient;
-    ev.events = EPOLLIN | EPOLLERR | EPOLLHUP | EPOLLRDHUP | flags; // 水平触发，保证所有数据都能读到
+    ev.events = EPOLLERR | EPOLLHUP | EPOLLRDHUP | flags; // 水平触发，保证所有数据都能读到
     return epoll_ctl(epollfd, EPOLL_CTL_MOD, fdclient->fd, &ev);
 }
 
 int tap_alloc () {
+#ifdef EXCEPTION_DEBUG
+    addTrace(__func__, sizeof(__func__));
+#endif
     int fd = open("/dev/net/tun", O_RDWR);
     if (fd < 0) {
         printf("open tun node fail, in %s, at %d\n", __FILE__, __LINE__);
@@ -169,7 +183,7 @@ int tap_alloc () {
         close(fd);
         return -5;
     }
-    printf("set ip addr for tap device to %s success, in %s, at %d\n", c.ip, __FILE__, __LINE__);
+    printf("set ip addr for tap device to %d.%d.%d.%d success, in %s, at %d\n", c.ip[0], c.ip[1], c.ip[2], c.ip[3], __FILE__, __LINE__);
     memset(&sin, 0, sizeof(struct sockaddr_in));
 	sin.sin_family = AF_INET;
     memcpy(&sin.sin_addr, c.mask, 4);
@@ -180,7 +194,7 @@ int tap_alloc () {
         close(fd);
         return -6;
     }
-    printf("set netmask for tap device to %s success, in %s, at %d\n", c.mask, __FILE__, __LINE__);
+    printf("set netmask for tap device to %d.%d.%d.%d success, in %s, at %d\n", c.mask[0], c.mask[1], c.mask[2], c.mask[3], __FILE__, __LINE__);
     struct rtentry rt;
     struct ROUTERS *routers = c.routers;
     while (routers != NULL) {
@@ -204,7 +218,7 @@ int tap_alloc () {
             close(fd);
             return -7;
         }
-        printf("add static route %s mask %s via %s success, in %s, at %d\n", routers->dstip, routers->dstmask, routers->gateway, __FILE__, __LINE__);
+        printf("add static route %d.%d.%d.%d mask %d.%d.%d.%d via %d.%d.%d.%d success, in %s, at %d\n", routers->dstip[0], routers->dstip[1], routers->dstip[2], routers->dstip[3], routers->dstmask[0], routers->dstmask[1], routers->dstmask[2], routers->dstmask[3], routers->gateway[0], routers->gateway[1], routers->gateway[2], routers->gateway[3], __FILE__, __LINE__);
         struct ROUTERS *r = routers;
         routers = routers->tail;
         free(r);
@@ -260,7 +274,7 @@ int tap_alloc () {
     fdclient->tlsconnected = 0;
     fdclient->watch = 0;
     fdclient->client = tapclient;
-    if (addtoepoll(fdclient)) {
+    if (addtoepoll(fdclient, EPOLLIN)) {
         printf("tapfd add to epoll fail, in %s, at %d\n",  __FILE__, __LINE__);
         fdclient->tail = remainfdclienthead;
         remainfdclienthead = fdclient;
@@ -275,11 +289,26 @@ int tap_alloc () {
 }
 
 int create_socketfd () {
+#ifdef EXCEPTION_DEBUG
+    addTrace(__func__, sizeof(__func__));
+#endif
     struct sockaddr_in sin;
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) {
         printf("run socket function is fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
         return -1;
+    }
+    unsigned int socksval = 1;
+    if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &socksval, sizeof(socksval))) {
+        printf("set socket reuseaddr fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
+        close(fd);
+        return -2;
+    }
+    socksval = 1;
+    if (setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &socksval, sizeof(socksval))) {
+        printf("set socket reuseport fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
+        close(fd);
+        return -3;
     }
     memset(&sin, 0, sizeof(struct sockaddr_in));
     sin.sin_family = AF_INET; // ipv4
@@ -288,12 +317,12 @@ int create_socketfd () {
     if (bind(fd, (struct sockaddr*)&sin, sizeof(sin)) < 0) {
         printf("bind port %d fail, fd:%d, in %s, at %d\n", c.bindport, fd, __FILE__, __LINE__);
         close(fd);
-        return -2;
+        return -4;
     }
     if (listen(fd, MAX_CONNECT) < 0) {
         printf("listen port %d fail, fd:%d, in %s, at %d\n", c.bindport, fd, __FILE__, __LINE__);
         close(fd);
-        return -3;
+        return -5;
     }
     if (remainfdclienthead) { // 有存货，直接拿出来用
         fdserver = remainfdclienthead;
@@ -303,24 +332,27 @@ int create_socketfd () {
         if (fdserver == NULL) {
             printf("malloc fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
             close(fd);
-            return -5;
+            return -6;
         }
     }
     fdserver->fd = fd;
     fdserver->watch = 0;
     fdserver->client = NULL;
-    if (addtoepoll(fdserver)) {
+    if (addtoepoll(fdserver, EPOLLIN)) {
         printf("serverfd add to epoll fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         fdserver->tail = remainfdclienthead;
         remainfdclienthead = fdserver;
         close(fd);
-        return -6;
+        return -7;
     }
     fdserver->watch = 1;
     return 0;
 }
 
 int addclient (int serverfd) {
+#ifdef EXCEPTION_DEBUG
+    addTrace(__func__, sizeof(__func__));
+#endif
     struct sockaddr_in sin;
     socklen_t in_addr_len = sizeof(struct sockaddr_in);
     int fd = accept(serverfd, (struct sockaddr*)&sin, &in_addr_len);
@@ -340,42 +372,30 @@ int addclient (int serverfd) {
         close(fd);
         return -3;
     }
-    socksval = 1;
-    if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &socksval, sizeof(socksval))) {
-        printf("set socket reuseaddr fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
-        close(fd);
-        return -4;
-    }
-    socksval = 1;
-    if (setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &socksval, sizeof(socksval))) {
-        printf("set socket reuseport fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
-        close(fd);
-        return -5;
-    }
     if (c.tcpkeepalive) {
         socksval = 1;
         if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, (unsigned char*)&socksval, sizeof(socksval))) { // 启动tcp心跳包
             printf("set socket keepalive fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
             close(fd);
-            return -6;
+            return -4;
         }
         socksval = c.tcpkeepidle;
         if (setsockopt(fd, SOL_TCP, TCP_KEEPIDLE, (unsigned char*)&socksval, sizeof(socksval))) { // 设置tcp心跳包参数
             printf("set socket keepidle fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
             close(fd);
-            return -7;
+            return -5;
         }
         socksval = c.tcpkeepintvl;
         if (setsockopt(fd, SOL_TCP, TCP_KEEPINTVL, (unsigned char*)&socksval, sizeof(socksval))) { // 设置tcp心跳包参数
             printf("set socket keepintvl fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
             close(fd);
-            return -8;
+            return -6;
         }
         socksval = c.tcpkeepcnt;
         if (setsockopt(fd, SOL_TCP, TCP_KEEPCNT, (unsigned char*)&socksval, sizeof(socksval))) { // 设置tcp心跳包参数
             printf("set socket keepcnt fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
             close(fd);
-            return -9;
+            return -7;
         }
     }
     // 修改发送缓冲区大小
@@ -383,20 +403,20 @@ int addclient (int serverfd) {
     if (getsockopt(fd, SOL_SOCKET, SO_SNDBUF, (unsigned char*)&socksval, &socksval_len)) {
         printf("get send buffer fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         close(fd);
-        return -10;
+        return -8;
     }
     printf("old send buffer is %d, socksval_len:%d, fd:%d, in %s, at %d\n", socksval, socksval_len, fd,  __FILE__, __LINE__);
     socksval = MAXDATASIZE;
     if (setsockopt(fd, SOL_SOCKET, SO_SNDBUF, (unsigned char*)&socksval, sizeof (socksval))) {
         printf("set send buffer fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         close(fd);
-        return -11;
+        return -9;
     }
     socksval_len = sizeof(socksval);
     if (getsockopt(fd, SOL_SOCKET, SO_SNDBUF, (unsigned char*)&socksval, &socksval_len)) {
         printf("get send buffer fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         close(fd);
-        return -12;
+        return -10;
     }
     printf("new send buffer is %d, socksval_len:%d, fd:%d, in %s, at %d\n", socksval, socksval_len, fd,  __FILE__, __LINE__);
     // 修改接收缓冲区大小
@@ -404,20 +424,20 @@ int addclient (int serverfd) {
     if (getsockopt(fd, SOL_SOCKET, SO_RCVBUF, (unsigned char*)&socksval, &socksval_len)) {
         printf("get receive buffer fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         close(fd);
-        return -13;
+        return -11;
     }
     printf("old receive buffer is %d, socksval_len:%d, fd:%d, in %s, at %d\n", socksval, socksval_len, fd,  __FILE__, __LINE__);
     socksval = MAXDATASIZE;
     if (setsockopt(fd, SOL_SOCKET, SO_RCVBUF, (char*)&socksval, sizeof(socksval))) {
         printf("set receive buffer fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         close(fd);
-        return -14;
+        return -12;
     }
     socksval_len = sizeof(socksval);
     if (getsockopt(fd, SOL_SOCKET, SO_RCVBUF, (unsigned char*)&socksval, &socksval_len)) {
         printf("get receive buffer fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         close(fd);
-        return -15;
+        return -13;
     }
     printf("new receive buffer is %d, socksval_len:%d, fd:%d, in %s, at %d\n", socksval, socksval_len, fd,  __FILE__, __LINE__);
     struct FDCLIENT *fdclient;
@@ -429,35 +449,40 @@ int addclient (int serverfd) {
         if (fdclient == NULL) {
             printf("malloc new fdclient object fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
             close(fd);
-            return -16;
+            return -14;
         }
     }
     fdclient->fd = fd;
     fdclient->watch = 0;
     fdclient->client = NULL;
-    if (c.ssl) {
+    uint32_t flags;
+    if (ctx) {
         SSL *tls = SSL_new(ctx);
         if (tls == NULL) {
             printf("SSL new fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
             fdclient->tail = remainfdclienthead;
             remainfdclienthead = fdclient;
             close(fd);
-            return -17;
+            return -15;
         }
-        if (!SSL_set_fd(tls, fd)) {
+        if (SSL_set_fd(tls, fd) != 1) {
             printf("SSL set fd fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
             fdclient->tail = remainfdclienthead;
             remainfdclienthead = fdclient;
             SSL_shutdown(tls);
             SSL_free(tls);
             close(fd);
-            return -18;
+            return -16;
         }
         fdclient->tls = tls;
         int r_code = SSL_accept(tls);
-        if (r_code < 0) {
+        if (r_code != 1) {
             int errcode = SSL_get_error(tls, r_code);
-            if (errcode != SSL_ERROR_WANT_READ) {
+            if (errcode == SSL_ERROR_WANT_WRITE) {
+                flags = EPOLLOUT;
+            } else if (errcode == SSL_ERROR_WANT_READ) {
+                flags = EPOLLIN;
+            } else {
                 perror("tls connect error");
                 printf("errno:%d, errcode:%d, in %s, at %d\n", errno, errcode, __FILE__, __LINE__);
                 fdclient->tail = remainfdclienthead;
@@ -465,17 +490,19 @@ int addclient (int serverfd) {
                 SSL_shutdown(tls);
                 SSL_free(tls);
                 close(fd);
-                return -19;
+                return -17;
             }
             fdclient->tlsconnected = 0;
         } else {
             fdclient->tlsconnected = 1;
+            flags = EPOLLIN;
         }
     } else {
         fdclient->tls = NULL;
         fdclient->tlsconnected = 0;
+        flags = EPOLLIN;
     }
-    if (addtoepoll(fdclient)) {
+    if (addtoepoll(fdclient, flags)) {
         printf("add to epoll fail, fd:%d, in %s, at %d\n", fd,  __FILE__, __LINE__);
         fdclient->tail = remainfdclienthead;
         remainfdclienthead = fdclient;
@@ -484,13 +511,16 @@ int addclient (int serverfd) {
             SSL_free(fdclient->tls);
         }
         close(fd);
-        return -20;
+        return -18;
     }
     fdclient->watch = 1;
     return 0;
 }
 
 int removeclient (struct FDCLIENT *fdclient) {
+#ifdef EXCEPTION_DEBUG
+    addTrace(__func__, sizeof(__func__));
+#endif
     if (!fdclient->watch) {
         return 0;
     }
@@ -547,6 +577,9 @@ int removeclient (struct FDCLIENT *fdclient) {
 }
 
 int writenode (struct CLIENTLIST *writeclient) {
+#ifdef EXCEPTION_DEBUG
+    addTrace(__func__, sizeof(__func__));
+#endif
     for (struct CLIENTLIST *client = writeclient ; client != NULL ; client = client->writetail) {
         struct PACKAGELIST *package = client->packagelisthead;
         client->packagelisthead = NULL;
@@ -554,11 +587,31 @@ int writenode (struct CLIENTLIST *writeclient) {
             ssize_t len;
             if (client->fdclient->tls) {
                 len = SSL_write(client->fdclient->tls, package->data, package->size);
+                if (len < 0) {
+                    client->fdclient->tlsconnected = 0;
+                    int errcode = SSL_get_error(client->fdclient->tls, len);
+                    if (errcode == SSL_ERROR_WANT_READ) {
+                        if (modepoll(client->fdclient, EPOLLIN)) {
+                            perror("modify epoll error");
+                            printf("fd:%d, errno:%d, ssl errcode:%d, in %s, at %d\n", client->fdclient->fd, errno, errcode,  __FILE__, __LINE__);
+                            removeclient(client->fdclient);
+                            break;
+                        }
+                        client->packagelisthead = package;
+                        break;
+                    } else if (errcode == SSL_ERROR_WANT_WRITE) {
+                        client->packagelisthead = package;
+                        break;
+                    } else {
+                        printf("fd:%d, errno:%d, ssl errcode:%d, in %s, at %d\n", client->fdclient->fd, errno, errcode,  __FILE__, __LINE__);
+                        removeclient(client->fdclient);
+                        break;
+                    }
+                }
             } else {
                 len = write(client->fdclient->fd, package->data, package->size);
             }
             if (len < 0) {
-                client->packagelisthead = package;
                 if (errno != EAGAIN) {
                     printf("errno:%d, in %s, at %d\n", errno,  __FILE__, __LINE__);
                     if (client == tapclient) {
@@ -569,8 +622,9 @@ int writenode (struct CLIENTLIST *writeclient) {
                     removeclient(client->fdclient);
                     break;
                 }
+                client->packagelisthead = package;
                 if (client->canwrite) { // 之前缓冲区是可以写入的，现在不行了
-                    if (modepoll(client->fdclient, EPOLLOUT)) { // 监听可写事件
+                    if (modepoll(client->fdclient, EPOLLIN | EPOLLOUT)) { // 监听可写事件
                         printf("modepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
                         removeclient(client->fdclient);
                         break;
@@ -585,7 +639,7 @@ int writenode (struct CLIENTLIST *writeclient) {
                 package->size = size;
                 client->packagelisthead = package;
                 if (client->canwrite) { // 之前缓冲区是可以写入的，现在不行了
-                    if (modepoll(client->fdclient, EPOLLOUT)) { // 监听可写事件
+                    if (modepoll(client->fdclient, EPOLLIN | EPOLLOUT)) { // 监听可写事件
                         printf("modepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
                         removeclient(client->fdclient);
                         break;
@@ -595,7 +649,7 @@ int writenode (struct CLIENTLIST *writeclient) {
                 break;
             }
             if (client->canwrite == 0) { // 缓冲区尚有空间，并且之前已经提示不足
-                if (modepoll(client->fdclient, 0)) { // 取消监听可写事件
+                if (modepoll(client->fdclient, EPOLLIN)) { // 取消监听可写事件
                     printf("modepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
                     client->packagelisthead = package;
                     removeclient(client->fdclient);
@@ -612,7 +666,10 @@ int writenode (struct CLIENTLIST *writeclient) {
     return 0;
 }
 
-struct CLIENTLIST* braodcastdata (struct CLIENTLIST *sourceclient, unsigned char *buff, int32_t packagesize) {
+struct CLIENTLIST* broadcastdata (struct CLIENTLIST *sourceclient, unsigned char *buff, int32_t packagesize) {
+#ifdef EXCEPTION_DEBUG
+    addTrace(__func__, sizeof(__func__));
+#endif
     struct CLIENTLIST *writeclient = NULL;
     for (struct CLIENTLIST *targetclient = clientlisthead ; targetclient != NULL ; targetclient = targetclient->tail) {
         if (targetclient == sourceclient) {
@@ -653,6 +710,9 @@ struct CLIENTLIST* braodcastdata (struct CLIENTLIST *sourceclient, unsigned char
 }
 
 int checkkeys (char *key) {
+#ifdef EXCEPTION_DEBUG
+    addTrace(__func__, sizeof(__func__));
+#endif
     struct KEYS *keys = c.keys;
     while (keys != NULL) {
         if (!strcmp(keys->key, key)) {
@@ -664,6 +724,9 @@ int checkkeys (char *key) {
 }
 
 int readdata (struct FDCLIENT *fdclient) {
+#ifdef EXCEPTION_DEBUG
+    addTrace(__func__, sizeof(__func__));
+#endif
     unsigned char *readbuff = NULL; // 这里是用于存储全部的需要写入的数据buf，
     unsigned int maxtotalsize = 0;
     struct CLIENTLIST *sourceclient = fdclient->client;
@@ -684,6 +747,25 @@ int readdata (struct FDCLIENT *fdclient) {
     } else { // 网络套接字。
         if (fdclient->tls) {
             len = SSL_read(fdclient->tls, readbuf, MAXDATASIZE);
+            if (len < 0) {
+                fdclient->tlsconnected = 0;
+                int errcode = SSL_get_error(fdclient->tls, len);
+                if (errcode == SSL_ERROR_WANT_WRITE) {
+                    if (modepoll(fdclient, EPOLLOUT)) {
+                        printf("modify epoll fd fail, in %s, at %d\n",  __FILE__, __LINE__);
+                        printf("fd:%d, errno:%d, ssl errcode:%d, in %s, at %d\n", fdclient->fd, errno, errcode,  __FILE__, __LINE__);
+                        removeclient(fdclient);
+                        return -1;
+                    }
+                    return 0;
+                } else if (errcode == SSL_ERROR_WANT_READ) {
+                    return 0;
+                } else {
+                    removeclient(fdclient);
+                    printf("fd:%d, errno:%d, ssl errcode:%d, in %s, at %d\n", fdclient->fd, errno, errcode,  __FILE__, __LINE__);
+                    return -2;
+                }
+            }
         } else {
             len = read(fdclient->fd, readbuf, MAXDATASIZE);
         }
@@ -693,7 +775,7 @@ int readdata (struct FDCLIENT *fdclient) {
                 perror("socket read error");
                 removeclient(fdclient);
             }
-            return -2;
+            return -3;
         }
     }
     readbuf[len] = '\0';
@@ -706,14 +788,13 @@ int readdata (struct FDCLIENT *fdclient) {
             if (sourceclient == NULL) {
                 printf("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
                 removeclient(fdclient);
-                return -3;
+                return -4;
             }
         }
         memset(sourceclient->mac, 0, 6);
         sourceclient->fdclient = fdclient;
         sourceclient->remainsize = 0;
         sourceclient->canwrite = 1;
-        sourceclient->tail = NULL;
         struct PACKAGELIST *package;
         if (remainpackagelisthead) { // 全局数据包回收站不为空
             package = remainpackagelisthead;
@@ -722,7 +803,7 @@ int readdata (struct FDCLIENT *fdclient) {
             package = (struct PACKAGELIST*) malloc(sizeof(struct PACKAGELIST));
             if (package == NULL) {
                 printf("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
-                return -4;
+                return -5;
             }
         }
         package->tail = NULL;
@@ -735,28 +816,33 @@ int readdata (struct FDCLIENT *fdclient) {
             time(&now);
             int len = strftime(package->data, MTU_SIZE+18, PAGE400, gmtime(&now));
             package->size = len;
+            sourceclient->writetail = NULL;
             writenode(sourceclient);
             removeclient(fdclient);
-            return -5;
+            return -6;
         }
         *headend = '\0'; // 给http头部结尾添加字符串结束符，不解析body。
         unsigned char *key = strstr(readbuf, "Authorization: ");
         if (key != NULL) {
             key = key + 15;
             unsigned char *keyend = strchr(key, '\r');
-            *keyend = '\0';
+            if (keyend != NULL) {
+                *keyend = '\0';
+            }
         }
-        if (key == NULL || !strcmp(httppath, c.httppath) || !checkkeys(key)) {
+        if (key == NULL || strcmp(httppath, c.httppath) || checkkeys(key)) {
             time_t now;
             time(&now);
             int len = strftime(package->data, MTU_SIZE+18, PAGE404, gmtime(&now));
             package->size = len;
+            sourceclient->writetail = NULL;
             writenode(sourceclient);
             removeclient(fdclient);
-            return -6;
+            return -7;
         }
         memcpy(package->data, PAGE101, sizeof(PAGE101)-1);
         package->size = sizeof(PAGE101)-1;
+        sourceclient->writetail = NULL;
         writenode(sourceclient);
         if (clientlisthead) {
             clientlisthead->head = sourceclient;
@@ -833,7 +919,7 @@ int readdata (struct FDCLIENT *fdclient) {
         unsigned char targetmac[6];
         memcpy(targetmac, buff + offset + 2, 6);
         if (targetmac[0] == 0xff && targetmac[1] == 0xff && targetmac[2] == 0xff && targetmac[3] == 0xff && targetmac[4] == 0xff && targetmac[5] == 0xff) { // 广播帧
-            writeclient = braodcastdata(sourceclient, buff + offset, packagesize);
+            writeclient = broadcastdata(sourceclient, buff + offset, packagesize);
             offset += packagesize;
             continue;
         }
@@ -845,7 +931,7 @@ int readdata (struct FDCLIENT *fdclient) {
             }
         }
         if (targetclient == NULL) { // mac地址表中不存在，使用广播策略
-            writeclient = braodcastdata(sourceclient, buff + offset, packagesize);
+            writeclient = broadcastdata(sourceclient, buff + offset, packagesize);
             offset += packagesize;
             continue;
         }
@@ -897,6 +983,9 @@ int readdata (struct FDCLIENT *fdclient) {
 }
 
 int parseconfigfile () {
+#ifdef EXCEPTION_DEBUG
+    addTrace(__func__, sizeof(__func__));
+#endif
     int fd = open("config.json", O_RDONLY);
     if (fd < 0) {
         printf("open config.json fail, in %s, at %d\n", __FILE__, __LINE__);
@@ -1062,6 +1151,7 @@ int parseconfigfile () {
 }
 
 int main () {
+    ListenSig();
     if (parseconfigfile()) {
         printf("parse config file fail, in %s, at %d\n", __FILE__, __LINE__);
         return -1;
@@ -1070,7 +1160,7 @@ int main () {
         SSL_library_init();
         OpenSSL_add_all_algorithms();
         SSL_load_error_strings();
-        ctx = SSL_CTX_new(TLS_client_method());
+        ctx = SSL_CTX_new(TLS_server_method());
         if (!SSL_CTX_use_certificate_file(ctx, c.crtpath, SSL_FILETYPE_PEM)) {
             printf("load certificate file fail, in %s, at %d\n", __FILE__, __LINE__);
             return -2;
@@ -1083,6 +1173,9 @@ int main () {
             printf("check private key fail, in %s, at %d\n", __FILE__, __LINE__);
             return -4;
         }
+        printf("init ssl success, crt:%s, key:%s, in %s, at %d\n", c.crtpath, c.keypath,  __FILE__, __LINE__);
+    } else {
+        ctx = NULL;
     }
     for (int i = 0 ; i < 4096 ; i++) {
         machashlist[i] = NULL;
@@ -1117,34 +1210,70 @@ int main () {
             } else if (fdclient == fdserver) {
                 addclient(fdclient->fd);
             } else if (events & EPOLLIN) { // 数据可读
-                if (fdclient->tls) {
-                    if (fdclient->tlsconnected == 0) {
-                        int r_code = SSL_accept(fdclient->tls);
-                        if (r_code < 0) {
-                            int errcode = SSL_get_error(fdclient->tls, r_code);
-                            if (errcode != SSL_ERROR_WANT_READ) {
-                                perror("tls connect error");
-                                printf("errno:%d, errcode:%d, in %s, at %d\n", errno, errcode, __FILE__, __LINE__);
+                if (fdclient->tls && fdclient->tlsconnected == 0) {
+                    int r_code = SSL_accept(fdclient->tls);
+                    if (r_code != 1) {
+                        int errcode = SSL_get_error(fdclient->tls, r_code);
+                        if (errcode == SSL_ERROR_WANT_WRITE) {
+                            if (modepoll(fdclient, EPOLLOUT)) {
+                                printf("modify epoll fd fail, in %s, at %d\n",  __FILE__, __LINE__);
                                 removeclient(fdclient);
                             }
-                        } else {
-                            fdclient->tlsconnected = 1;
+                        } else if (errcode != SSL_ERROR_WANT_READ) {
+                            perror("tls connect error");
+                            printf("errno:%d, ssl errcode:%d, in %s, at %d\n", errno, errcode, __FILE__, __LINE__);
+                            removeclient(fdclient);
                         }
                     } else {
-                        readdata(fdclient);
+                        fdclient->tlsconnected = 1;
+                        if (fdclient->client != NULL && fdclient->client->packagelisthead != NULL) {
+                            if (modepoll(fdclient, EPOLLIN | EPOLLOUT)) {
+                                printf("modify epoll fd fail, in %s, at %d\n",  __FILE__, __LINE__);
+                                removeclient(fdclient);
+                            }
+                        }
                     }
                 } else {
                     readdata(fdclient);
                 }
             } else if (events & EPOLLOUT) { // 数据可写
-                fdclient->client->writetail = NULL;
-                writenode(fdclient->client);
+                if (fdclient->tls && fdclient->tlsconnected == 0) {
+                    int r_code = SSL_accept(fdclient->tls);
+                    if (r_code != 1) {
+                        int errcode = SSL_get_error(fdclient->tls, r_code);
+                        if (errcode == SSL_ERROR_WANT_READ) { // 资源暂时不可用，write没有ready.
+                            if (modepoll(fdclient, EPOLLIN)) {
+                                printf("modify epoll fd fail, in %s, at %d\n",  __FILE__, __LINE__);
+                                removeclient(fdclient);
+                            }
+                        } else if (errcode != SSL_ERROR_WANT_WRITE) {
+                            perror("tls connect error");
+                            printf("errno:%d, errcode:%d, in %s, at %d\n", errno, errcode, __FILE__, __LINE__);
+                            removeclient(fdclient);
+                        }
+                    } else {
+                        fdclient->tlsconnected = 1;
+                        uint32_t flags;
+                        if (fdclient->client != NULL && fdclient->client->packagelisthead != NULL) {
+                            flags = EPOLLIN | EPOLLOUT;
+                        } else {
+                            flags = EPOLLIN;
+                        }
+                        if (modepoll(fdclient, flags)) {
+                            printf("modify epoll fd fail, in %s, at %d\n",  __FILE__, __LINE__);
+                            removeclient(fdclient);
+                        }
+                    }
+                } else {
+                    fdclient->client->writetail = NULL;
+                    writenode(fdclient->client);
+                }
             } else {
                 printf("receive new event 0x%08x, in %s, at %d\n", events,  __FILE__, __LINE__);
             }
         }
     }
-    if (c.ssl) {
+    if (ctx) {
         SSL_CTX_free(ctx);
     }
     return 0;
