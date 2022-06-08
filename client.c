@@ -806,6 +806,7 @@ int parseconfigfile () {
 }
 
 int main (int argc, char *argv[]) {
+    printf("build at %s %s, in %s, at %d\n", __DATE__, __TIME__, __FILE__, __LINE__);
     ListenSig();
     if (parseconfigfile()) {
         printf("parse config file fail, in %s, at %d\n", __FILE__, __LINE__);
