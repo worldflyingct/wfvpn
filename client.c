@@ -27,7 +27,7 @@
 #define MTU_SIZE          1500
 
 const char httprequest[] = "GET %s HTTP/1.1\r\nHost: %s\r\nConnection: Upgrade\r\nPragma: no-cache\r\nCache-Control: no-cache\r\nUpgrade: websocket\r\nAuthorization: %s\r\n\r\n";
-const char httpresponse[] = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n";
+const char httpresponse[] = "HTTP/1.1 101 Switching Protocols\r\n";
 
 struct PACKAGELIST {
     unsigned char data[MTU_SIZE + 18];
@@ -188,12 +188,10 @@ int tap_alloc () {
         memcpy(&rt.rt_gateway, &sin, sizeof(struct sockaddr_in));
         rt.rt_flags = RTF_GATEWAY;
         if (ioctl(socket_fd, SIOCADDRT, &rt) < 0) {
-            printf("set static route fail, in %s, at %d\n", __FILE__, __LINE__);
-            close(socket_fd);
-            close(fd);
-            return -7;
+            printf("add static route %d.%d.%d.%d mask %d.%d.%d.%d via %d.%d.%d.%d fail, in %s, at %d\n", routers->dstip[0], routers->dstip[1], routers->dstip[2], routers->dstip[3], routers->dstmask[0], routers->dstmask[1], routers->dstmask[2], routers->dstmask[3], routers->gateway[0], routers->gateway[1], routers->gateway[2], routers->gateway[3], __FILE__, __LINE__);
+        } else {
+            printf("add static route %d.%d.%d.%d mask %d.%d.%d.%d via %d.%d.%d.%d success, in %s, at %d\n", routers->dstip[0], routers->dstip[1], routers->dstip[2], routers->dstip[3], routers->dstmask[0], routers->dstmask[1], routers->dstmask[2], routers->dstmask[3], routers->gateway[0], routers->gateway[1], routers->gateway[2], routers->gateway[3], __FILE__, __LINE__);
         }
-        printf("add static route %d.%d.%d.%d mask %d.%d.%d.%d via %d.%d.%d.%d success, in %s, at %d\n", routers->dstip[0], routers->dstip[1], routers->dstip[2], routers->dstip[3], routers->dstmask[0], routers->dstmask[1], routers->dstmask[2], routers->dstmask[3], routers->gateway[0], routers->gateway[1], routers->gateway[2], routers->gateway[3], __FILE__, __LINE__);
         struct ROUTERS *r = routers;
         routers = routers->tail;
         free(r);
@@ -369,7 +367,7 @@ int connect_socketfd () {
         return -19;
     }
     readbuf[len] = '\0';
-    if (strcmp(readbuf, httpresponse)) {
+    if (strncmp(readbuf, httpresponse, sizeof(httpresponse)-1)) {
         printf("password check fail, httpresponse:%s, fd:%d, in %s, at %d\n", readbuf, fd, __FILE__, __LINE__);
         if (tls) {
             SSL_shutdown(tls);
@@ -723,9 +721,9 @@ int parseconfigfile () {
     }
     yyjson_val *httphost = yyjson_obj_get(root, "httphost");
     if (httphost == NULL || yyjson_get_type(httphost) != YYJSON_TYPE_STR) {
-        strcpy(c.httphost, yyjson_get_str(httphost));
-    } else {
         strcpy(c.httphost, "localhost");
+    } else {
+        strcpy(c.httphost, yyjson_get_str(httphost));
     }
     yyjson_val *httppath = yyjson_obj_get(root, "httppath");
     if (httppath == NULL || yyjson_get_type(httppath) != YYJSON_TYPE_STR) {

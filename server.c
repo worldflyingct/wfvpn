@@ -213,12 +213,10 @@ int tap_alloc () {
         memcpy(&rt.rt_gateway, &sin, sizeof(struct sockaddr_in));
         rt.rt_flags = RTF_GATEWAY;
         if (ioctl(socket_fd, SIOCADDRT, &rt) < 0) {
-            printf("set static route fail, in %s, at %d\n", __FILE__, __LINE__);
-            close(socket_fd);
-            close(fd);
-            return -7;
+            printf("add static route %d.%d.%d.%d mask %d.%d.%d.%d via %d.%d.%d.%d fail, in %s, at %d\n", routers->dstip[0], routers->dstip[1], routers->dstip[2], routers->dstip[3], routers->dstmask[0], routers->dstmask[1], routers->dstmask[2], routers->dstmask[3], routers->gateway[0], routers->gateway[1], routers->gateway[2], routers->gateway[3], __FILE__, __LINE__);
+        } else {
+            printf("add static route %d.%d.%d.%d mask %d.%d.%d.%d via %d.%d.%d.%d success, in %s, at %d\n", routers->dstip[0], routers->dstip[1], routers->dstip[2], routers->dstip[3], routers->dstmask[0], routers->dstmask[1], routers->dstmask[2], routers->dstmask[3], routers->gateway[0], routers->gateway[1], routers->gateway[2], routers->gateway[3], __FILE__, __LINE__);
         }
-        printf("add static route %d.%d.%d.%d mask %d.%d.%d.%d via %d.%d.%d.%d success, in %s, at %d\n", routers->dstip[0], routers->dstip[1], routers->dstip[2], routers->dstip[3], routers->dstmask[0], routers->dstmask[1], routers->dstmask[2], routers->dstmask[3], routers->gateway[0], routers->gateway[1], routers->gateway[2], routers->gateway[3], __FILE__, __LINE__);
         struct ROUTERS *r = routers;
         routers = routers->tail;
         free(r);
