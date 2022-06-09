@@ -44,6 +44,7 @@ struct CLIENTLIST {
     unsigned char remainpackage[MTU_SIZE + 18]; // 自己接收到的数据出现数据不全，将不全的数据存在这里，等待新的数据将其补全
     unsigned int remainsize; // 不全的数据大小
     unsigned char canwrite;
+    unsigned char watch;
 } tclient, sclient;
 struct CLIENTLIST *tapclient = &tclient;
 struct CLIENTLIST *socketclient = &sclient;
@@ -208,6 +209,7 @@ int tap_alloc () {
         close(fd);
         return -8;
     }
+    tapclient->watch = 1;
     return 0;
 }
 
@@ -404,6 +406,7 @@ int connect_socketfd () {
         close(fd);
         return -22;
     }
+    socketclient->watch = 1;
     return 0;
 }
 
@@ -411,28 +414,38 @@ int removeclient () {
 #ifdef EXCEPTION_DEBUG
     addTrace(__func__, sizeof(__func__));
 #endif
-    struct epoll_event ev;
-    epoll_ctl(epollfd, EPOLL_CTL_DEL, tapclient->fd, &ev);
-    close(tapclient->fd);
-    struct PACKAGELIST *package = tapclient->packagelisthead;
-    while (package) {
-        struct PACKAGELIST *tmppackage = package;
-        package = package->tail;
-        tmppackage->tail = remainpackagelisthead;
-        remainpackagelisthead = tmppackage;
+    if (tapclient->watch) {
+        if (epoll_ctl(epollfd, EPOLL_CTL_DEL, tapclient->fd, NULL)) {
+            printf("errno: %d, fd:%d, in %s, at %d\n", errno, tapclient->fd,  __FILE__, __LINE__);
+            perror("EPOLL CTL DEL fail");
+        }
+        tapclient->watch = 0;
+        close(tapclient->fd);
+        struct PACKAGELIST *package = tapclient->packagelisthead;
+        while (package) {
+            struct PACKAGELIST *tmppackage = package;
+            package = package->tail;
+            tmppackage->tail = remainpackagelisthead;
+            remainpackagelisthead = tmppackage;
+        }
     }
-    epoll_ctl(epollfd, EPOLL_CTL_DEL, socketclient->fd, &ev);
-    if (socketclient->tls) {
-        SSL_shutdown(socketclient->tls);
-        SSL_free(socketclient->tls);
-    }
-    close(socketclient->fd);
-    package = socketclient->packagelisthead;
-    while (package) {
-        struct PACKAGELIST *tmppackage = package;
-        package = package->tail;
-        tmppackage->tail = remainpackagelisthead;
-        remainpackagelisthead = tmppackage;
+    if (tapclient->watch) {
+        if (epoll_ctl(epollfd, EPOLL_CTL_DEL, socketclient->fd, NULL)) {
+            printf("errno: %d, fd:%d, in %s, at %d\n", errno, socketclient->fd,  __FILE__, __LINE__);
+            perror("EPOLL CTL DEL fail");
+        }
+        if (socketclient->tls) {
+            SSL_shutdown(socketclient->tls);
+            SSL_free(socketclient->tls);
+        }
+        close(socketclient->fd);
+        struct PACKAGELIST *package = socketclient->packagelisthead;
+        while (package) {
+            struct PACKAGELIST *tmppackage = package;
+            package = package->tail;
+            tmppackage->tail = remainpackagelisthead;
+            remainpackagelisthead = tmppackage;
+        }
     }
     return 0;
 }
@@ -839,8 +852,7 @@ int main (int argc, char *argv[]) {
             printf("alloc tap fail, in %s, at %d\n",  __FILE__, __LINE__);
             goto RETRY;
         }
-        unsigned char loop = 1;
-        while (loop) {
+        while (1) {
             static struct epoll_event evs[MAX_EVENT];
             static int wait_count;
             wait_count = epoll_wait(epollfd, evs, MAX_EVENT, -1);
@@ -849,9 +861,7 @@ int main (int argc, char *argv[]) {
                 uint32_t events = evs[i].events;
                 if (events & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) { // 检测到数据异常
                     printf ("receive error event, fd:%d, EPOLLERR:%d, EPOLLHUP:%d, EPOLLRDHUP:%d, in %s, at %d\n", client->fd, events&EPOLLERR ? 1 : 0, events&EPOLLHUP ? 1 : 0, events&EPOLLRDHUP ? 1 : 0,  __FILE__, __LINE__);
-                    removeclient();
-                    loop = 0;
-                    break;
+                    goto RETRY;
                 } else if (events & EPOLLIN) {
                     if (client->tls && client->tlsconnected == 0) {
                         int r_code = SSL_connect(client->tls);
@@ -860,32 +870,24 @@ int main (int argc, char *argv[]) {
                             if (errcode == SSL_ERROR_WANT_WRITE) { // 资源暂时不可用，write没有ready.
                                 if (modepoll(client, EPOLLOUT)) {
                                     printf("modify epoll fd fail, in %s, at %d\n",  __FILE__, __LINE__);
-                                    removeclient();
-                                    loop = 0;
-                                    break;
+                                    goto RETRY;
                                 }
                             } else if (errcode != SSL_ERROR_WANT_READ) {
                                 perror("tls connect error");
                                 printf("errno:%d, errcode:%d, in %s, at %d\n", errno, errcode, __FILE__, __LINE__);
-                                removeclient();
-                                loop = 0;
-                                break;
+                                goto RETRY;
                             }
                         } else {
                             client->tlsconnected = 1;
                             if (client->packagelisthead != NULL) {
                                 if (modepoll(client, EPOLLIN | EPOLLOUT)) {
                                     printf("modify epoll fd fail, in %s, at %d\n",  __FILE__, __LINE__);
-                                    removeclient(client);
-                                    loop = 0;
-                                    break;
+                                    goto RETRY;
                                 }
                             }
                         }
                     } else if (readdata(client) < 0) {
-                        removeclient();
-                        loop = 0;
-                        break;
+                        goto RETRY;
                     }
                 } else if (events & EPOLLOUT) {
                     if (client->tls && client->tlsconnected == 0) {
@@ -895,41 +897,32 @@ int main (int argc, char *argv[]) {
                             if (errcode == SSL_ERROR_WANT_READ) { // 资源暂时不可用，write没有ready.
                                 if (modepoll(client, EPOLLIN)) {
                                     printf("modify epoll fd fail, in %s, at %d\n",  __FILE__, __LINE__);
-                                    removeclient(client);
-                                    loop = 0;
-                                    break;
+                                    goto RETRY;
                                 }
                             } else if (errcode != SSL_ERROR_WANT_WRITE) {
                                 perror("tls connect error");
                                 printf("errno:%d, errcode:%d, in %s, at %d\n", errno, errcode, __FILE__, __LINE__);
-                                removeclient(client);
-                                loop = 0;
-                                break;
+                                goto RETRY;
                             }
                         } else {
                             client->tlsconnected = 1;
                             uint32_t flags = client->packagelisthead != NULL ? (EPOLLIN | EPOLLOUT) : EPOLLIN;
                             if (modepoll(client, flags)) {
                                 printf("modify epoll fd fail, in %s, at %d\n",  __FILE__, __LINE__);
-                                removeclient(client);
-                                loop = 0;
-                                break;
+                                goto RETRY;
                             }
                         }
                     } else if (writenode(client) < 0) {
-                        removeclient();
-                        loop = 0;
-                        break;
+                        goto RETRY;
                     }
                 } else {
                     printf("receive new event 0x%08x, in %s, at %d\n", evs[i].events,  __FILE__, __LINE__);
-                    removeclient();
-                    loop = 0;
-                    break;
+                    goto RETRY;
                 }
             }
         }
 RETRY:
+        removeclient();
         sleep(c.retryinterval);
     }
     if (ctx) {

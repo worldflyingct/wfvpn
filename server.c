@@ -527,7 +527,6 @@ int removeclient (struct FDCLIENT *fdclient) {
     if (epoll_ctl(epollfd, EPOLL_CTL_DEL, fdclient->fd, NULL)) {
         printf("errno: %d, fd:%d, in %s, at %d\n", errno, fdclient->fd,  __FILE__, __LINE__);
         perror("EPOLL CTL DEL fail");
-        return -1;
     }
     fdclient->watch = 0;
     if (fdclient->tls) {
