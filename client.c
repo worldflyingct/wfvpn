@@ -192,9 +192,9 @@ int tap_alloc () {
         } else {
             printf("add static route %d.%d.%d.%d mask %d.%d.%d.%d via %d.%d.%d.%d success, in %s, at %d\n", routers->dstip[0], routers->dstip[1], routers->dstip[2], routers->dstip[3], routers->dstmask[0], routers->dstmask[1], routers->dstmask[2], routers->dstmask[3], routers->gateway[0], routers->gateway[1], routers->gateway[2], routers->gateway[3], __FILE__, __LINE__);
         }
-        struct ROUTERS *r = routers;
+        // struct ROUTERS *r = routers;
         routers = routers->tail;
-        free(r);
+        // free(r);
     }
     close(socket_fd);
     tapclient->fd = fd;
@@ -427,7 +427,7 @@ int removeclient () {
             remainpackagelisthead = tmppackage;
         }
     }
-    if (tapclient->watch) {
+    if (socketclient->watch) {
         if (epoll_ctl(epollfd, EPOLL_CTL_DEL, socketclient->fd, NULL)) {
             printf("errno: %d, fd:%d, in %s, at %d\n", errno, socketclient->fd,  __FILE__, __LINE__);
             perror("EPOLL CTL DEL fail");
@@ -436,6 +436,7 @@ int removeclient () {
             SSL_shutdown(socketclient->tls);
             SSL_free(socketclient->tls);
         }
+        socketclient->watch = 0;
         close(socketclient->fd);
         struct PACKAGELIST *package = socketclient->packagelisthead;
         while (package) {
