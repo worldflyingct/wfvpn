@@ -197,6 +197,12 @@ int tap_alloc () {
         // free(r);
     }
     close(socket_fd);
+    if (setnonblocking(fd) < 0) {
+        printf("set nonblocking fail, fd:%d, in %s, at %d\n", fd, __FILE__, __LINE__);
+        close(fd);
+        return -8;
+    }
+    printf("tap device name is %s, tapfd %d, in %s, at %d\n", ifr.ifr_name, fd, __FILE__, __LINE__);
     tapclient->fd = fd;
     tapclient->tls = NULL;
     tapclient->packagelisthead = NULL;
@@ -205,7 +211,7 @@ int tap_alloc () {
     if (addtoepoll(tapclient)) {
         printf("clientfd addtoepoll fail, in %s, at %d\n",  __FILE__, __LINE__);
         close(fd);
-        return -8;
+        return -9;
     }
     tapclient->watch = 1;
     return 0;
