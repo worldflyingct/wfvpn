@@ -616,7 +616,7 @@ int readdata (struct CLIENTLIST *sourceclient) {
     }
     struct CLIENTLIST *writeclient = NULL;
     while (offset < totalsize) {
-        if (offset + 64 > totalsize) { // mac帧单个最小必须是64个，小于这个的数据包一定不完整
+        if (offset + 60 > totalsize) { // mac帧单个最小必须是60个，小于这个的数据包一定不完整
             int remainsize = totalsize - offset;
             memcpy(sourceclient->remainpackage, buff + offset, remainsize);
             sourceclient->remainsize = remainsize;
