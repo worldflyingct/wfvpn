@@ -724,8 +724,8 @@ int readdata (struct FDCLIENT *fdclient) {
 #ifdef EXCEPTION_DEBUG
     addTrace(__func__, sizeof(__func__));
 #endif
-    unsigned char *readbuff = NULL; // 这里是用于存储全部的需要写入的数据buf，
-    unsigned int maxtotalsize = 0;
+    static unsigned char *readbuff = NULL; // 这里是用于存储全部的需要写入的数据buf，
+    static unsigned int maxtotalsize = 0;
     struct CLIENTLIST *sourceclient = fdclient->client;
     ssize_t len;
     if (sourceclient == tapclient) { // tap驱动，原始数据，需要自己额外添加数据包长度。
@@ -811,7 +811,7 @@ int readdata (struct FDCLIENT *fdclient) {
         if (sscanf(readbuf, "GET %s %s\r\n", httppath, httpprot) != 2 || strcmp(httpprot, "HTTP/1.1") || headend == NULL) {
             time_t now;
             time(&now);
-            int len = strftime(package->data, MTU_SIZE+18, PAGE400, gmtime(&now));
+            int len = strftime(package->data, MTU_SIZE+14, PAGE400, gmtime(&now));
             package->size = len;
             sourceclient->writetail = NULL;
             writenode(sourceclient);
@@ -830,7 +830,7 @@ int readdata (struct FDCLIENT *fdclient) {
         if (key == NULL || strcmp(httppath, c.httppath) || checkkeys(key)) {
             time_t now;
             time(&now);
-            int len = strftime(package->data, MTU_SIZE+18, PAGE404, gmtime(&now));
+            int len = strftime(package->data, MTU_SIZE+14, PAGE404, gmtime(&now));
             package->size = len;
             sourceclient->writetail = NULL;
             writenode(sourceclient);
@@ -857,12 +857,13 @@ int readdata (struct FDCLIENT *fdclient) {
     if (sourceclient->remainsize > 0) {
         totalsize = sourceclient->remainsize + len;
         if (totalsize > maxtotalsize) {
-            if (readbuff) {
+            if (maxtotalsize > 0) {
                 free(readbuff);
             }
             readbuff = (unsigned char*) malloc(totalsize * sizeof(unsigned char));
             if (readbuff == NULL) {
                 printf("malloc fail, in %s, at %d\n",  __FILE__, __LINE__);
+                maxtotalsize = 0;
                 return -9;
             }
             maxtotalsize = totalsize;

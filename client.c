@@ -539,8 +539,8 @@ int readdata (struct CLIENTLIST *sourceclient) {
 #ifdef EXCEPTION_DEBUG
     addTrace(__func__, sizeof(__func__));
 #endif
-    unsigned char *readbuff = NULL; // 这里是用于存储全部的需要写入的数据buf，
-    int32_t maxtotalsize = 0;
+    static unsigned char *readbuff = NULL; // 这里是用于存储全部的需要写入的数据buf，
+    static unsigned int maxtotalsize = 0;
     struct CLIENTLIST *targetclient;
     ssize_t len;
     if (sourceclient == tapclient) { // tap驱动，原始数据，需要自己额外添加数据包长度。
@@ -596,7 +596,7 @@ int readdata (struct CLIENTLIST *sourceclient) {
     if (sourceclient->remainsize > 0) {
         totalsize = sourceclient->remainsize + len;
         if (totalsize > maxtotalsize) {
-            if (readbuff) {
+            if (maxtotalsize > 0) {
                 free (readbuff);
             }
             readbuff = (unsigned char*) malloc(totalsize * sizeof(unsigned char));
