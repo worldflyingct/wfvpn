@@ -37,7 +37,7 @@ const char PAGE400[] =  "HTTP/1.1 400 Bad Request\r\nServer: nginx/1.14.2\r\nDat
 const char PAGE101[] =  "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n";
 
 struct PACKAGELIST {
-    unsigned char data[MTU_SIZE + 18];
+    unsigned char data[MTU_SIZE + 14];
     unsigned int size;
     struct PACKAGELIST *tail;
 };
@@ -47,7 +47,7 @@ struct CLIENTLIST {
     unsigned char mac[6]; // 该端口的源mac地址
     struct PACKAGELIST *packagelisthead; // 发给自己这个端口的数据包列表头部
     struct PACKAGELIST *packagelisttail; // 发给自己这个端口的数据包列表尾部
-    unsigned char remainpackage[MTU_SIZE + 18]; // 自己接收到的数据出现数据不全，将不全的数据存在这里，等待新的数据将其补全
+    unsigned char remainpackage[MTU_SIZE + 14]; // 自己接收到的数据出现数据不全，将不全的数据存在这里，等待新的数据将其补全
     unsigned int remainsize; // 不全的数据大小
     unsigned char canwrite;
     struct CLIENTLIST *hashhead; // 从哈希表中寻找上一个clientlist
@@ -729,7 +729,7 @@ int readdata (struct FDCLIENT *fdclient) {
     struct CLIENTLIST *sourceclient = fdclient->client;
     ssize_t len;
     if (sourceclient == tapclient) { // tap驱动，原始数据，需要自己额外添加数据包长度。
-        len = read(fdclient->fd, readbuf + 2, MAXDATASIZE); // 这里最大只可能是1518
+        len = read(fdclient->fd, readbuf + 2, MAXDATASIZE); // 这里最大只可能是1514
         if (len < 0) {
             if (errno != EAGAIN) {
                 printf("errno:%d, in %s, at %d\n", errno,  __FILE__, __LINE__);
